@@ -386,9 +386,21 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
   const queue = [];
   let pumping = false;
 
+  const SVC = '0000fff0-0000-1000-8000-00805f9b34fb';
+  const CHR = '0000fff3-0000-1000-8000-00805f9b34fb';
+  let step = '';
+  const errText = e => {
+    if (!e) return 'неизвестная ошибка';
+    if (typeof e === 'string') return e;
+    if (e.message || e.name) return [e.name, e.message].filter(Boolean).join(': ');
+    try { return JSON.stringify(e); } catch (x) { return String(e); }
+  };
+
   async function rawWrite(bytes) {
     const data = new Uint8Array(bytes);
-    if (ch.writeValueWithoutResponse) return ch.writeValueWithoutResponse(data);
+    if (ch.writeValueWithoutResponse) {
+      try { return await ch.writeValueWithoutResponse(data); } catch (e) { if (!ch.writeValue) throw e; }
+    }
     return ch.writeValue(data);
   }
   function send(bytes, key) {
@@ -420,36 +432,49 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
       setHint('Этот браузер не умеет Bluetooth. На iPhone открой страницу в Bluefy, на Android и компьютере в Chrome.', true);
       return;
     }
-    if (device) {
-      try { await openLink(); return; } catch (e) { console.warn(e); }
+    if (!device) {
+      let slow = 0;
+      try {
+        setStatus('busy', 'Поиск…');
+        slow = setTimeout(() => setHint('Окно выбора лампы не появилось? Браузер не может показать его на этой странице. Открой пульт по прямой https-ссылке, например с GitHub Pages.', true), 8000);
+        device = await navigator.bluetooth.requestDevice({
+          filters: [{ namePrefix: 'MELK' }, { namePrefix: 'ELK' }],
+          optionalServices: [SVC]
+        });
+        clearTimeout(slow);
+        if (!device.__melkWatch) { device.addEventListener('gattserverdisconnected', onDisconnect); device.__melkWatch = true; }
+      } catch (e) {
+        clearTimeout(slow);
+        device = null;
+        setStatus('idle', 'Не подключено');
+        const t = errText(e);
+        if ((e && e.name === 'NotFoundError') || /cancel/i.test(t)) setHint('Лампа не выбрана. Проверь, что LightBlue закрыт, и попробуй ещё раз.');
+        else if (e && (e.name === 'SecurityError' || e.name === 'NotAllowedError')) setHint('Браузер запретил Bluetooth на этой странице. Открой её по прямой https-ссылке в Bluefy или Chrome.', true);
+        else setHint('Не получилось найти лампу: ' + t, true);
+        return;
+      }
     }
-    let slow = 0;
     try {
-      setStatus('busy', 'Поиск…');
-      slow = setTimeout(() => setHint('Окно выбора лампы не появилось? Браузер не может показать его на этой странице. Открой пульт по прямой https-ссылке, например с GitHub Pages.', true), 8000);
-      device = await navigator.bluetooth.requestDevice({
-        filters: [{ namePrefix: 'MELK' }, { namePrefix: 'ELK' }],
-        optionalServices: [0xfff0]
-      });
-      clearTimeout(slow);
-      if (!device.__melkWatch) { device.addEventListener('gattserverdisconnected', onDisconnect); device.__melkWatch = true; }
       await openLink();
     } catch (e) {
-      clearTimeout(slow);
-      device = null;
-      setStatus('idle', 'Не подключено');
-      if (e.name === 'NotFoundError') setHint('Лампа не выбрана. Проверь, что LightBlue закрыт, и попробуй ещё раз.');
-      else if (e.name === 'SecurityError' || e.name === 'NotAllowedError') setHint('Браузер запретил Bluetooth на этой странице. Открой её по прямой https-ссылке в Bluefy или Chrome.', true);
-      else setHint('Не получилось подключиться: ' + (e.message || e.name), true);
+      ready = false;
+      setStatus('err', 'Нет связи');
+      setHint('Сбой на шаге «' + step + '»: ' + errText(e) + '. Нажми «Подключить лампу» ещё раз.', true);
+      setConnectBtn('Подключить лампу', true);
     }
   }
 
   async function openLink() {
     setStatus('busy', 'Подключаю…');
     manualDisconnect = false;
-    const server = await device.gatt.connect();
-    const service = await server.getPrimaryService(0xfff0);
-    ch = await service.getCharacteristic(0xfff3);
+    step = 'соединение';
+    const server = device.gatt.connected ? device.gatt : await device.gatt.connect();
+    await sleep(300);
+    step = 'сервис FFF0';
+    const service = await server.getPrimaryService(SVC);
+    step = 'канал FFF3';
+    ch = await service.getCharacteristic(CHR);
+    step = 'вход в контроллер';
     // MELK login: without it the controller ignores every command
     await rawWrite(CMD.login1); await sleep(1000);
     await rawWrite(CMD.login2); await sleep(1000);

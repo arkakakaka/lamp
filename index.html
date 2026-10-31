@@ -127,6 +127,18 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
 .stepper{display:flex;align-items:center;gap:8px}
 .stepper .num{flex:1;text-align:center;font-family:var(--f-mono);font-size:20px;font-variant-numeric:tabular-nums}
 .stepper .btn{width:48px;padding:0}
+.cats{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+.cats::-webkit-scrollbar{display:none}
+.cat{flex:0 0 auto;padding:7px 12px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:13.5px;font-weight:500;cursor:pointer}
+.cat[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.sfx-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.sfx{display:flex;align-items:center;gap:10px;min-height:56px;padding:9px 10px;border-radius:12px;border:1px solid var(--line);background:var(--surface);cursor:pointer;text-align:left;min-width:0}
+.sfx .sw2{flex-shrink:0;width:30px;height:30px;border-radius:9px;background:var(--g)}
+.sfx-txt{min-width:0}
+.sfx b{display:block;font-weight:600;font-size:13.5px;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sfx small{display:block;font-family:var(--f-mono);font-size:10.5px;color:var(--dim);letter-spacing:.04em;text-transform:uppercase;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sfx[aria-pressed="true"]{border-color:rgba(var(--lamp-rgb),.9);background:var(--surface-2)}
+.chip.grad{background:var(--g);box-shadow:none}
 
 /* scenes */
 .scenes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
@@ -238,20 +250,24 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
   </section>
 
   <section class="panel" id="p-fx" role="tabpanel" aria-labelledby="t-fx" hidden>
-    <div class="fx-grid" id="fxGrid"></div>
-    <div class="field">
-      <div class="field-head"><span class="label">Листать все эффекты</span><span class="val">0–255</span></div>
-      <div class="stepper">
-        <button class="btn" id="fxPrev" aria-label="Предыдущий эффект">‹</button>
-        <div class="num" id="fxNum">№ 22</div>
-        <button class="btn" id="fxNext" aria-label="Следующий эффект">›</button>
+    <div class="cats" id="fxCats"></div>
+    <div class="sfx-grid" id="sfxGrid"></div>
+    <div class="panel" id="hwBox" hidden>
+      <div class="fx-grid" id="fxGrid"></div>
+      <div class="field">
+        <div class="field-head"><span class="label">Листать все эффекты</span><span class="val">0–255</span></div>
+        <div class="stepper">
+          <button class="btn" id="fxPrev" aria-label="Предыдущий эффект">‹</button>
+          <div class="num" id="fxNum">№ 22</div>
+          <button class="btn" id="fxNext" aria-label="Следующий эффект">›</button>
+        </div>
       </div>
     </div>
     <div class="field">
       <div class="field-head"><label class="label" for="speed">Скорость</label><span class="val" id="speedVal">50</span></div>
       <input type="range" id="speed" min="0" max="100" value="50">
     </div>
-    <p class="hint">Номера эффектов взяты у похожих контроллеров MELK. Если название не совпадает с тем, что делает лампа, листай номера стрелками и сохраняй удачные в сцены.</p>
+    <p class="hint" id="fxHint">Эти эффекты повторяют сцены Philips Hue, LIFX и WLED. Телефон считает их сам и шлёт цвет на лампу 12 раз в секунду, поэтому держи пульт открытым.</p>
   </section>
 
   <section class="panel" id="p-scenes" role="tabpanel" aria-labelledby="t-scenes" hidden>
@@ -350,8 +366,88 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
     { id: 'movie', name: 'Кино', mode: 'color', color: [25, 45, 255], brightness: 15 },
     { id: 'night', name: 'Ночник', mode: 'color', color: [255, 60, 0], brightness: 4 },
     { id: 'neon', name: 'Неон', mode: 'color', color: [255, 0, 170], brightness: 80 },
-    { id: 'rainbow', name: 'Радуга', mode: 'effect', effect: 22, speed: 40, brightness: 70 }
+    { id: 'fire', name: 'Камин', mode: 'soft', soft: 'fireplace', speed: 50, brightness: 60 },
+    { id: 'aurora', name: 'Сияние', mode: 'soft', soft: 'aurora', speed: 40, brightness: 80 },
+    { id: 'storm', name: 'Гроза', mode: 'soft', soft: 'lightning', speed: 50, brightness: 100 }
   ];
+
+  /* ---------- software effects: computed here, streamed to the lamp ---------- */
+  const hash = n => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+  const noise = x => { const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f); return hash(i) * (1 - u) + hash(i + 1) * u; };
+  const smooth = u => u * u * (3 - 2 * u);
+  const mix = (a, b, u) => a.map((v, i) => v + (b[i] - v) * u);
+  const scale = (c, v) => c.map(x => x * v);
+  const morph = (pal, t, period) => {
+    const n = pal.length, x = (((t / period) % 1) + 1) % 1 * n, i = Math.floor(x);
+    return mix(pal[i % n], pal[(i + 1) % n], smooth(x - i));
+  };
+  const hsv = (h, s, v) => hsvToRgb(((h % 360) + 360) % 360, s, v);
+  const sparkle = (t, seed, rate) => Math.max(0, noise(t * rate + seed) - 0.78) / 0.22;
+
+  const SOFT_CATS = [['cozy', 'Уют'], ['nature', 'Природа'], ['party', 'Вечеринка'], ['mine', 'Твой цвет'], ['calm', 'Отдых'], ['lamp', 'В лампе']];
+  const SOFT = [
+    { id: 'candle', cat: 'cozy', name: 'Свеча', src: 'Hue · WLED', pal: ['#ff5508', '#ff8c1e', '#ff6a10'],
+      fn: t => { const n = noise(t * 4) * 0.6 + noise(t * 11 + 50) * 0.4; let v = 0.45 + 0.55 * n; if (noise(t * 0.7 + 9) < 0.15) v *= 0.6; return scale(mix([255, 85, 8], [255, 140, 30], n), v); } },
+    { id: 'fireplace', cat: 'cozy', name: 'Камин', src: 'Hue', pal: ['#ff2300', '#ff5a00', '#ff9610'],
+      fn: t => scale(morph([[255, 35, 0], [255, 90, 0], [255, 150, 15], [255, 60, 0]], t + noise(t * 3) * 2, 6), 0.5 + 0.5 * noise(t * 7 + 20)) },
+    { id: 'flame', cat: 'cozy', name: 'Пламя', src: 'LIFX', pal: ['#ff1e00', '#ff7a10', '#ffbe1e'],
+      fn: t => scale(mix([255, 30, 0], [255, 190, 30], noise(t * 5 + 3)), 0.35 + 0.65 * noise(t * 9)) },
+    { id: 'sunbeam', cat: 'cozy', name: 'Солнечный луч', src: 'Hue', pal: ['#ffcd82', '#ffe6b4', '#ffd28c'],
+      fn: t => scale(mix([255, 195, 120], [255, 230, 180], 0.5 + 0.5 * Math.sin(t * 0.3)), 0.72 + 0.22 * Math.sin(t * 0.8) + 0.06 * noise(t * 2)) },
+    { id: 'sunset', cat: 'cozy', name: 'Закат', src: 'LIFX', pal: ['#ff9628', '#ff501e', '#c81e46', '#5a146e'],
+      fn: t => morph([[255, 150, 40], [255, 80, 30], [200, 30, 70], [90, 20, 110], [200, 30, 70], [255, 80, 30]], t, 60) },
+    { id: 'opal', cat: 'cozy', name: 'Опал', src: 'Hue', pal: ['#ffc8b4', '#c8b4ff', '#b4e6ff', '#ffe6c8'],
+      fn: t => scale(morph([[255, 200, 180], [200, 180, 255], [180, 230, 255], [255, 230, 200]], t, 40), 0.9) },
+    { id: 'lava', cat: 'cozy', name: 'Лавовая лампа', src: 'классика', pal: ['#ff1e50', '#ff5a00', '#c80078'],
+      fn: t => scale(morph([[255, 30, 80], [255, 90, 0], [200, 0, 120], [255, 60, 40]], t + 1.5 * Math.sin(t * 0.2), 20), 0.8 + 0.2 * Math.sin(t * 0.5)) },
+    { id: 'aurora', cat: 'nature', name: 'Сияние', src: 'WLED Aurora', pal: ['#00ff78', '#00b4ff', '#6e00ff', '#28ff28'],
+      fn: t => scale(morph([[0, 255, 120], [0, 180, 255], [110, 0, 255], [0, 255, 170], [40, 255, 40]], t, 30), 0.45 + 0.55 * noise(t * 0.6)) },
+    { id: 'underwater', cat: 'nature', name: 'Под водой', src: 'Hue', pal: ['#003cdc', '#0096d2', '#00beaa'],
+      fn: t => scale(morph([[0, 60, 220], [0, 150, 210], [0, 90, 255], [0, 190, 170]], t, 18), 0.6 + 0.4 * noise(t * 2.5)) },
+    { id: 'ocean', cat: 'nature', name: 'Океан', src: 'WLED Pacifica', pal: ['#001e78', '#00aabe', '#0050a0'],
+      fn: t => scale(mix([0, 30, 120], [0, 170, 190], 0.5 + 0.25 * (Math.sin(t * 0.7) + Math.sin(t * 1.3 + 1))), 0.7 + 0.3 * noise(t * 1.5)) },
+    { id: 'lightning', cat: 'nature', name: 'Гроза', src: 'WLED', pal: ['#080a28', '#d2dcff', '#080a28'],
+      fn: (t, m) => {
+        if (m.next === undefined) m.next = t + 1;
+        if (t >= m.next) { m.end = t + 0.15 + 0.35 * hash(t); m.next = m.end + 1.5 + 6 * hash(t + 1); }
+        if (m.end && t < m.end) return scale([210, 220, 255], hash(Math.floor(t * 22)) > 0.45 ? 1 : 0.15);
+        return scale([10, 12, 45], 0.8 + 0.2 * noise(t));
+      } },
+    { id: 'clouds', cat: 'nature', name: 'Облака', src: 'LIFX', pal: ['#6ea0ff', '#c8dcff', '#e6ebff'],
+      fn: t => morph([[110, 160, 255], [200, 220, 255], [140, 180, 255], [230, 235, 255]], t + noise(t * 0.3) * 3, 24) },
+    { id: 'forest', cat: 'nature', name: 'Лес', src: 'классика', pal: ['#14c81e', '#5aff00', '#00963c'],
+      fn: t => scale(morph([[20, 200, 30], [90, 255, 0], [0, 150, 60], [40, 230, 80]], t, 20), 0.6 + 0.4 * noise(t * 1.8)) },
+    { id: 'cosmos', cat: 'nature', name: 'Космос', src: 'Hue', pal: ['#28008c', '#0a1464', '#6400aa'],
+      fn: t => mix(scale(morph([[40, 0, 140], [10, 20, 100], [100, 0, 170], [0, 40, 140]], t, 30), 0.7 + 0.3 * noise(t * 0.8)), [180, 200, 255], sparkle(t, 3, 6) * 0.8) },
+    { id: 'stars', cat: 'nature', name: 'Звёзды', src: 'Hue Sparkle · WLED', pal: ['#1e2350', '#ffffff', '#1e2350'],
+      fn: t => { const s = sparkle(t, 11, 8); return mix(scale([120, 140, 255], 0.22), [255, 255, 255], s); } },
+    { id: 'rainbow', cat: 'party', name: 'Радуга', src: 'WLED Colorloop', pal: ['#ff0000', '#ffff00', '#00ff00', '#00ffff', '#0000ff', '#ff00ff'],
+      fn: t => hsv(t * 36, 1, 1) },
+    { id: 'prism', cat: 'party', name: 'Призма', src: 'Hue', pal: ['#ff0050', '#ffb400', '#00ff64', '#0064ff', '#b400ff'],
+      fn: t => { const p = [[255, 0, 80], [255, 180, 0], [0, 255, 100], [0, 100, 255], [180, 0, 255], [255, 0, 200]]; const x = t / 2, i = Math.floor(x), f = x - i; return mix(p[i % 6], p[(i + 1) % 6], f < 0.75 ? 0 : smooth((f - 0.75) / 0.25)); } },
+    { id: 'disco', cat: 'party', name: 'Диско', src: 'классика', pal: ['#ff00c8', '#00ffd0', '#ffee00', '#7a00ff'],
+      fn: t => hsv(hash(Math.floor(t * 2.5)) * 360, 1, 1) },
+    { id: 'synthwave', cat: 'party', name: 'Синтвейв', src: 'классика', pal: ['#ff00c8', '#00e6ff'],
+      fn: t => mix([255, 0, 200], [0, 230, 255], 0.5 + 0.5 * Math.sin(t * 1.6)) },
+    { id: 'police', cat: 'party', name: 'Полиция', src: 'классика', pal: ['#ff0000', '#0000ff'],
+      fn: t => { const p = (t * 1.2) % 1, on = ((p % 0.5) * 6) % 1 < 0.55; return on ? (p < 0.5 ? [255, 0, 0] : [0, 30, 255]) : [0, 0, 0]; } },
+    { id: 'strobe', cat: 'party', name: 'Стробоскоп', src: 'WLED', pal: ['#ffffff', '#000000', '#ffffff'],
+      fn: t => ((t * 3) % 1 < 0.4 ? [255, 255, 255] : [0, 0, 0]) },
+    { id: 'heartbeat', cat: 'party', name: 'Сердцебиение', src: 'WLED', pal: ['#ff0028', '#300008', '#ff0028'],
+      fn: t => { const p = (t * 1.1) % 1; const v = Math.max(Math.exp(-Math.pow((p - 0.06) / 0.05, 2)), 0.7 * Math.exp(-Math.pow((p - 0.28) / 0.06, 2))); return scale([255, 0, 40], 0.12 + 0.88 * v); } },
+    { id: 'enchant', cat: 'party', name: 'Волшебство', src: 'Hue', pal: ['#ff78c8', '#b45aff', '#ffbe6e'],
+      fn: t => mix(scale(morph([[255, 120, 200], [180, 90, 255], [255, 190, 110], [255, 150, 220]], t, 25), 0.75 + 0.25 * Math.sin(t * 1.3)), [255, 220, 150], sparkle(t, 7, 5) * 0.6) },
+    { id: 'breathe', cat: 'mine', name: 'Дыхание', src: 'WLED · твой цвет', mine: true,
+      fn: t => scale(state.color, 0.12 + 0.88 * (0.5 - 0.5 * Math.cos(t * 1.2))) },
+    { id: 'glisten', cat: 'mine', name: 'Блеск', src: 'Hue · твой цвет', mine: true,
+      fn: t => mix(scale(state.color, 0.7 + 0.3 * noise(t * 6)), [255, 255, 255], sparkle(t, 5, 9) * 0.45) },
+    { id: 'sunrise', cat: 'calm', name: 'Рассвет 15 мин', src: 'WLED · LIFX', realtime: true, pal: ['#280000', '#ff2800', '#ff9632', '#fff0dc'],
+      fn: t => { const u = Math.min(1, t / 900), stops = [[40, 0, 0], [255, 40, 0], [255, 120, 20], [255, 200, 120], [255, 240, 220]]; const x = u * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(x)); return scale(mix(stops[i], stops[i + 1], x - i), 0.05 + 0.95 * u); } },
+    { id: 'breath426', cat: 'calm', name: 'Дыхание 4-2-6', src: 'медитация', realtime: true, pal: ['#5a6eff', '#965aff'],
+      fn: t => { const p = t % 12; const v = p < 4 ? 0.15 + 0.85 * smooth(p / 4) : p < 6 ? 1 : 1 - 0.85 * smooth((p - 6) / 6); return scale(mix([90, 110, 255], [150, 90, 255], p < 6 ? p / 6 : (12 - p) / 6), v); } }
+  ];
+  const softById = id => SOFT.find(f => f.id === id);
+  const softGradient = fx => fx.mine ? `linear-gradient(135deg, ${toHex(state.color)}, #111)` : `linear-gradient(135deg, ${fx.pal.join(', ')})`;
 
   /* ---------- colour helpers ---------- */
   function hsvToRgb(h, s, v) {
@@ -374,7 +470,7 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
 
   /* ---------- state ---------- */
   const state = Object.assign(
-    { on: true, mode: 'color', color: [31, 91, 255], hue: 223, sat: 0.88, brightness: 80, effect: 22, speed: 50 },
+    { on: true, mode: 'color', color: [31, 91, 255], hue: 223, sat: 0.88, brightness: 80, effect: 22, speed: 50, soft: 'candle' },
     store.get('lamp.state', {})
   );
   let customScenes = store.get('lamp.scenes', []);
@@ -519,11 +615,42 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
   function ensureOn() { if (!state.on) { state.on = true; send(CMD.on); send(CMD.bri(state.brightness), 'bri'); } }
 
   function applyAll() {
-    if (!state.on) { send(CMD.off); return; }
+    if (!state.on) { send(CMD.off); syncWake(); return; }
     send(CMD.on);
     send(CMD.bri(state.brightness), 'bri');
     if (state.mode === 'color') send(CMD.color(...state.color), 'color');
+    else if (state.mode === 'soft') runSoft();
     else { send(CMD.effect(state.effect), 'fx'); send(CMD.speed(state.speed), 'speed'); }
+    syncWake();
+  }
+
+  /* software effect loop: paints the tube every frame, sends to the lamp ~12 times a second */
+  let softRAF = 0, softMem = {}, softLastSend = 0;
+  function startSoft(id) {
+    if (mic) stopMic();
+    ensureOn();
+    state.mode = 'soft';
+    state.soft = id;
+    softMem = {};
+    runSoft();
+    syncWake();
+    render();
+  }
+  function runSoft() {
+    if (!softRAF) { softMem.prev = undefined; softRAF = requestAnimationFrame(softTick); }
+  }
+  function softTick(now) {
+    softRAF = 0;
+    const fx = softById(state.soft);
+    if (state.mode !== 'soft' || !state.on || !fx) return;
+    const dt = softMem.prev === undefined ? 0 : Math.min(0.1, (now - softMem.prev) / 1000);
+    softMem.prev = now;
+    softMem.clock = (softMem.clock || 0) + dt * (fx.realtime ? 1 : 0.25 + state.speed / 50);
+    const rgb = fx.fn(softMem.clock, softMem).map(v => Math.max(0, Math.min(255, Math.round(v))));
+    softMem.last = rgb;
+    document.documentElement.style.setProperty('--lamp-rgb', rgb.join(','));
+    if (now - softLastSend > 80) { softLastSend = now; send(CMD.color(...rgb), 'color'); }
+    softRAF = requestAnimationFrame(softTick);
   }
 
   function setColor(rgb, fromHsv) {
@@ -532,6 +659,7 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
     state.color = rgb;
     if (!fromHsv) { const [h, s] = rgbToHsv(...rgb); state.hue = h; state.sat = s; }
     send(CMD.color(...rgb), 'color');
+    syncWake();
     render();
   }
   function setBrightness(v) { ensureOn(); state.brightness = v; send(CMD.bri(v), 'bri'); render(); }
@@ -541,20 +669,25 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
     state.effect = (n + 256) % 256;
     send(CMD.effect(state.effect), 'fx');
     send(CMD.speed(state.speed), 'speed');
+    syncWake();
     render();
   }
   function togglePower() {
     state.on = !state.on;
-    if (state.on) applyAll(); else send(CMD.off);
+    if (state.on) applyAll(); else { send(CMD.off); syncWake(); }
     render();
   }
 
   function applyScene(s) {
+    if (mic) stopMic();
     state.on = true;
     state.brightness = s.brightness;
     if (s.mode === 'color') {
       state.mode = 'color'; state.color = s.color.slice();
       const [h, sat] = rgbToHsv(...state.color); state.hue = h; state.sat = sat;
+    } else if (s.mode === 'soft') {
+      state.mode = 'soft'; state.soft = s.soft; state.speed = s.speed; softMem = {};
+      if (s.color) state.color = s.color.slice();
     } else { state.mode = 'effect'; state.effect = s.effect; state.speed = s.speed; }
     applyAll();
     render();
@@ -563,12 +696,17 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
 
   /* ---------- render ---------- */
   function effectName(n) { const f = EFFECTS.find(e => e[0] === n); return f ? f[1] : 'Эффект №' + n; }
+  function modeName() {
+    if (state.mode === 'color') return 'Цвет';
+    if (state.mode === 'soft') { const fx = softById(state.soft); return fx ? fx.name : 'Эффект'; }
+    return effectName(state.effect);
+  }
 
   function render() {
     const root = document.documentElement.style;
     const tube = $('#tube');
-    const glowRgb = state.mode === 'effect' ? [190, 110, 255] : state.color;
-    root.setProperty('--lamp-rgb', glowRgb.join(','));
+    if (state.mode !== 'soft') root.setProperty('--lamp-rgb', (state.mode === 'effect' ? [190, 110, 255] : state.color).join(','));
+    else if (!softRAF && softMem.last) root.setProperty('--lamp-rgb', softMem.last.join(','));
     root.setProperty('--glow', state.on ? (0.15 + 0.85 * state.brightness / 100).toFixed(2) : '0');
     root.setProperty('--fx-dur', (8 - state.speed * 0.07).toFixed(2) + 's');
     tube.classList.toggle('off', !state.on);
@@ -576,9 +714,9 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
 
     $('#power').setAttribute('aria-pressed', String(state.on));
     $('#stateTitle').textContent = state.on ? 'Включена' : 'Выключена';
-    $('#stateSub').textContent = state.on
-      ? (state.mode === 'color' ? 'Цвет' : effectName(state.effect)) + ' · ' + state.brightness + '%'
-      : 'Нажми, чтобы включить';
+    $('#stateSub').textContent = state.on ? modeName() + ' · ' + state.brightness + '%' : 'Нажми, чтобы включить';
+    document.querySelectorAll('.sfx').forEach(b => b.setAttribute('aria-pressed', String(state.mode === 'soft' && b.dataset.id === state.soft)));
+    document.querySelectorAll('.sfx[data-mine] .sw2').forEach(el => el.style.setProperty('--g', `linear-gradient(135deg, ${toHex(state.color)}, #111)`));
 
     $('#bri').value = state.brightness; $('#briVal').textContent = state.brightness + '%';
     $('#hue').value = state.hue; $('#hueVal').textContent = state.hue + '°';
@@ -608,13 +746,15 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
       const btn = document.createElement('button');
       btn.className = 'scene';
       const chip = document.createElement('i');
-      chip.className = 'chip' + (s.mode === 'effect' ? ' rainbow' : '');
+      const sfx = s.mode === 'soft' ? softById(s.soft) : null;
+      chip.className = 'chip' + (s.mode === 'effect' ? ' rainbow' : sfx ? ' grad' : '');
       if (s.mode === 'color') chip.style.setProperty('--c', toHex(s.color));
+      if (sfx) chip.style.setProperty('--g', sfx.mine && s.color ? `linear-gradient(135deg, ${toHex(s.color)}, #111)` : softGradient(sfx));
       const txt = document.createElement('div');
       txt.className = 'scene-txt';
       const b = document.createElement('b'); b.textContent = s.name;
       const sp = document.createElement('span');
-      sp.textContent = (s.mode === 'color' ? 'цвет' : effectName(s.effect).toLowerCase()) + ' · ' + s.brightness + '%';
+      sp.textContent = (s.mode === 'color' ? 'цвет' : sfx ? sfx.name.toLowerCase() : effectName(s.effect).toLowerCase()) + ' · ' + s.brightness + '%';
       txt.append(b, sp);
       btn.append(chip, txt);
       btn.addEventListener('click', () => applyScene(s));
@@ -646,20 +786,26 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
   let timer = null, wake = null;
   async function holdScreen() { try { wake = navigator.wakeLock ? await navigator.wakeLock.request('screen') : null; } catch (e) { wake = null; } }
   function releaseScreen() { try { wake && wake.release(); } catch (e) {} wake = null; }
+  // keep the screen on while the phone drives the lamp (timer or software effect); Bluefy has its own switch for this
+  function syncWake() {
+    const want = !!timer || (state.mode === 'soft' && state.on);
+    if (want && !wake) holdScreen(); else if (!want && wake) releaseScreen();
+    try { if (navigator.bluetooth && navigator.bluetooth.setScreenDimEnabled) navigator.bluetooth.setScreenDimEnabled(!want); } catch (e) {}
+  }
 
   function startTimer(min) {
     stopTimer();
     const total = min * 60000;
     timer = { end: Date.now() + total, startBri: state.brightness, fade: $('#fade').checked, fadeWin: Math.min(10 * 60000, total) };
     timer.iv = setInterval(tickTimer, 1000);
-    holdScreen();
+    syncWake();
     $('#countdown').hidden = false;
     tickTimer();
     toast('Выключу через ' + (min < 60 ? min + ' мин' : (min / 60).toString().replace('.', ',') + ' ч'));
   }
   function stopTimer() {
     if (!timer) return;
-    clearInterval(timer.iv); timer = null; releaseScreen();
+    clearInterval(timer.iv); timer = null; syncWake();
     $('#countdown').hidden = true;
   }
   function tickTimer() {
@@ -749,6 +895,37 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
     $('#fxGrid').append(b);
   });
 
+  let fxCat = store.get('lamp.fxcat', 'cozy');
+  if (!SOFT_CATS.some(c => c[0] === fxCat)) fxCat = 'cozy';
+  const FX_HINT_SOFT = 'Эти эффекты повторяют сцены Philips Hue, LIFX и WLED. Телефон считает их сам и шлёт цвет на лампу 12 раз в секунду, поэтому держи пульт открытым.';
+  const FX_HINT_LAMP = 'Встроенные эффекты живут в самой лампе и работают без телефона. Номера взяты у похожих контроллеров MELK: если название не совпадает, листай стрелками и сохраняй удачные в сцены.';
+  function renderFx() {
+    const cats = $('#fxCats'); cats.innerHTML = '';
+    SOFT_CATS.forEach(([id, label]) => {
+      const b = document.createElement('button');
+      b.className = 'cat'; b.textContent = label; b.setAttribute('aria-pressed', String(id === fxCat));
+      b.addEventListener('click', () => { fxCat = id; store.set('lamp.fxcat', id); renderFx(); });
+      cats.append(b);
+    });
+    const grid = $('#sfxGrid'); grid.innerHTML = '';
+    const isLamp = fxCat === 'lamp';
+    grid.hidden = isLamp; $('#hwBox').hidden = !isLamp;
+    $('#fxHint').textContent = isLamp ? FX_HINT_LAMP : FX_HINT_SOFT;
+    SOFT.filter(f => f.cat === fxCat).forEach(fx => {
+      const b = document.createElement('button');
+      b.className = 'sfx'; b.dataset.id = fx.id;
+      if (fx.mine) b.dataset.mine = '1';
+      b.setAttribute('aria-pressed', String(state.mode === 'soft' && state.soft === fx.id));
+      const sw = document.createElement('i'); sw.className = 'sw2'; sw.style.setProperty('--g', softGradient(fx));
+      const txt = document.createElement('div'); txt.className = 'sfx-txt';
+      const name = document.createElement('b'); name.textContent = fx.name;
+      const src = document.createElement('small'); src.textContent = fx.src;
+      txt.append(name, src); b.append(sw, txt);
+      b.addEventListener('click', () => startSoft(fx.id));
+      grid.append(b);
+    });
+  }
+
   document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(t => {
       const on = t === tab;
@@ -779,7 +956,7 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
     const name = $('#sceneName').value.trim() || 'Сцена ' + (customScenes.length + 1);
     customScenes.push({
       id: 'c' + Date.now(), custom: true, name, mode: state.mode, brightness: state.brightness,
-      color: state.color.slice(), effect: state.effect, speed: state.speed
+      color: state.color.slice(), effect: state.effect, speed: state.speed, soft: state.soft
     });
     store.set('lamp.scenes', customScenes);
     $('#sceneName').value = '';
@@ -793,8 +970,10 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
   if (!navigator.bluetooth) setHint('В этом браузере нет Bluetooth, работает только предпросмотр. Для управления открой страницу в Bluefy (iPhone) или Chrome.');
 
   renderScenes();
+  renderFx();
   render();
   showPacket(CMD.color(...state.color));
+  if (state.mode === 'soft' && state.on) runSoft();
 })();
 </script>
 </body>

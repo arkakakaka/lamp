@@ -90,6 +90,7 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
 #hue{--track:linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)}
 #sat{--track:linear-gradient(90deg,#fff,var(--hue-color,#00f))}
 #speed{--track:linear-gradient(90deg,#161a26,#8b93ab)}
+#smooth{--track:linear-gradient(90deg,#161a26,rgb(var(--lamp-rgb)))}
 #sens{--track:linear-gradient(90deg,#161a26,#8b93ab)}
 
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 16px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:var(--fg);font-weight:500;cursor:pointer}
@@ -267,7 +268,11 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
       <div class="field-head"><label class="label" for="speed">Скорость</label><span class="val" id="speedVal">50</span></div>
       <input type="range" id="speed" min="0" max="100" value="50">
     </div>
-    <p class="hint" id="fxHint">Эти эффекты повторяют сцены Philips Hue, LIFX и WLED. Телефон считает их сам и шлёт цвет на лампу 12 раз в секунду, поэтому держи пульт открытым.</p>
+    <div class="field" id="smoothField">
+      <div class="field-head"><label class="label" for="smooth">Плавность</label><span class="val" id="smoothVal">50</span></div>
+      <input type="range" id="smooth" min="0" max="100" value="50">
+    </div>
+    <p class="hint" id="fxHint">Эти эффекты повторяют сцены Philips Hue, LIFX и WLED. Телефон считает их сам и шлёт цвет на лампу до 25 раз в секунду, поэтому держи пульт открытым. Если где-то всё равно дёргает, прибавь плавность.</p>
   </section>
 
   <section class="panel" id="p-scenes" role="tabpanel" aria-labelledby="t-scenes" hidden>
@@ -371,83 +376,137 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
     { id: 'storm', name: 'Гроза', mode: 'soft', soft: 'lightning', speed: 50, brightness: 100 }
   ];
 
-  /* ---------- software effects: computed here, streamed to the lamp ---------- */
+  /* ---------- software effects: computed here, streamed to the lamp ----------
+     Effects work in perceptual space (0..1, gamma 2): equal steps look equal to the eye.
+     encode() turns that into the PWM values the lamp expects, so a palette colour comes out
+     exactly as in static mode while fades and flicker stay even at the dark end. */
+  const P = c => c.map(v => Math.sqrt(Math.max(0, v) / 255));
+  const C = (...cols) => cols.map(P);
+  const encode = p => p.map(v => Math.max(0, Math.min(255, Math.round(255 * v * v))));
   const hash = n => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
   const noise = x => { const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f); return hash(i) * (1 - u) + hash(i + 1) * u; };
+  const fbm = x => 0.6 * noise(x) + 0.3 * noise(x * 2.03 + 17) + 0.1 * noise(x * 4.1 + 31);
   const smooth = u => u * u * (3 - 2 * u);
+  const clamp01 = v => Math.max(0, Math.min(1, v));
   const mix = (a, b, u) => a.map((v, i) => v + (b[i] - v) * u);
   const scale = (c, v) => c.map(x => x * v);
   const morph = (pal, t, period) => {
     const n = pal.length, x = (((t / period) % 1) + 1) % 1 * n, i = Math.floor(x);
     return mix(pal[i % n], pal[(i + 1) % n], smooth(x - i));
   };
-  const hsv = (h, s, v) => hsvToRgb(((h % 360) + 360) % 360, s, v);
-  const sparkle = (t, seed, rate) => Math.max(0, noise(t * rate + seed) - 0.78) / 0.22;
+  const hueP = h => hsvToRgb(((h % 360) + 360) % 360, 1, 1).map(v => v / 255);
+  const twinkle = (t, seed, rate) => smooth(clamp01((noise(t * rate + seed) - 0.72) / 0.28));
+  const gauss = (x, c, w) => Math.exp(-Math.pow((x - c) / w, 2));
+  const WHITE = [1, 1, 1], OFF = [0, 0, 0];
 
+  const PAL = {
+    candle: C([255, 95, 12], [255, 150, 40]),
+    fire: C([255, 40, 0], [255, 105, 5], [255, 165, 35]),
+    flame: C([255, 35, 0], [255, 185, 35]),
+    sunbeam: C([255, 195, 120], [255, 232, 185]),
+    sunset: C([255, 150, 40], [255, 80, 30], [200, 30, 70], [90, 20, 110], [200, 30, 70], [255, 80, 30]),
+    opal: C([255, 200, 180], [200, 180, 255], [180, 230, 255], [255, 230, 200]),
+    lava: C([255, 30, 80], [255, 90, 0], [200, 0, 120], [255, 60, 40]),
+    aurora: C([0, 255, 120], [0, 180, 255], [110, 0, 255], [0, 255, 170], [40, 255, 40]),
+    under: C([0, 60, 220], [0, 150, 210], [0, 90, 255], [0, 190, 170]),
+    ocean: C([0, 30, 120], [0, 170, 190]),
+    storm: C([10, 12, 45], [215, 225, 255]),
+    clouds: C([110, 160, 255], [200, 220, 255], [140, 180, 255], [230, 235, 255]),
+    forest: C([20, 200, 30], [90, 255, 0], [0, 150, 60], [40, 230, 80]),
+    cosmos: C([40, 0, 140], [10, 20, 100], [100, 0, 170], [0, 40, 140]),
+    star: C([180, 200, 255], [120, 140, 255]),
+    prism: C([255, 0, 80], [255, 180, 0], [0, 255, 100], [0, 100, 255], [180, 0, 255], [255, 0, 200]),
+    synth: C([255, 0, 200], [0, 230, 255]),
+    police: C([255, 0, 0], [0, 30, 255]),
+    heart: C([255, 0, 40]),
+    enchant: C([255, 120, 200], [180, 90, 255], [255, 190, 110], [255, 150, 220]),
+    gold: C([255, 220, 150]),
+    sunrise: C([40, 0, 0], [255, 40, 0], [255, 120, 20], [255, 200, 120], [255, 240, 220]),
+    breath: C([90, 110, 255], [150, 90, 255])
+  };
+
+  // tau: smoothing time in seconds (scaled by the «Плавность» slider); 0 = hard cuts on purpose
   const SOFT_CATS = [['cozy', 'Уют'], ['nature', 'Природа'], ['party', 'Вечеринка'], ['mine', 'Твой цвет'], ['calm', 'Отдых'], ['lamp', 'В лампе']];
   const SOFT = [
-    { id: 'candle', cat: 'cozy', name: 'Свеча', src: 'Hue · WLED', pal: ['#ff5508', '#ff8c1e', '#ff6a10'],
-      fn: t => { const n = noise(t * 4) * 0.6 + noise(t * 11 + 50) * 0.4; let v = 0.45 + 0.55 * n; if (noise(t * 0.7 + 9) < 0.15) v *= 0.6; return scale(mix([255, 85, 8], [255, 140, 30], n), v); } },
-    { id: 'fireplace', cat: 'cozy', name: 'Камин', src: 'Hue', pal: ['#ff2300', '#ff5a00', '#ff9610'],
-      fn: t => scale(morph([[255, 35, 0], [255, 90, 0], [255, 150, 15], [255, 60, 0]], t + noise(t * 3) * 2, 6), 0.5 + 0.5 * noise(t * 7 + 20)) },
-    { id: 'flame', cat: 'cozy', name: 'Пламя', src: 'LIFX', pal: ['#ff1e00', '#ff7a10', '#ffbe1e'],
-      fn: t => scale(mix([255, 30, 0], [255, 190, 30], noise(t * 5 + 3)), 0.35 + 0.65 * noise(t * 9)) },
-    { id: 'sunbeam', cat: 'cozy', name: 'Солнечный луч', src: 'Hue', pal: ['#ffcd82', '#ffe6b4', '#ffd28c'],
-      fn: t => scale(mix([255, 195, 120], [255, 230, 180], 0.5 + 0.5 * Math.sin(t * 0.3)), 0.72 + 0.22 * Math.sin(t * 0.8) + 0.06 * noise(t * 2)) },
-    { id: 'sunset', cat: 'cozy', name: 'Закат', src: 'LIFX', pal: ['#ff9628', '#ff501e', '#c81e46', '#5a146e'],
-      fn: t => morph([[255, 150, 40], [255, 80, 30], [200, 30, 70], [90, 20, 110], [200, 30, 70], [255, 80, 30]], t, 60) },
-    { id: 'opal', cat: 'cozy', name: 'Опал', src: 'Hue', pal: ['#ffc8b4', '#c8b4ff', '#b4e6ff', '#ffe6c8'],
-      fn: t => scale(morph([[255, 200, 180], [200, 180, 255], [180, 230, 255], [255, 230, 200]], t, 40), 0.9) },
-    { id: 'lava', cat: 'cozy', name: 'Лавовая лампа', src: 'классика', pal: ['#ff1e50', '#ff5a00', '#c80078'],
-      fn: t => scale(morph([[255, 30, 80], [255, 90, 0], [200, 0, 120], [255, 60, 40]], t + 1.5 * Math.sin(t * 0.2), 20), 0.8 + 0.2 * Math.sin(t * 0.5)) },
-    { id: 'aurora', cat: 'nature', name: 'Сияние', src: 'WLED Aurora', pal: ['#00ff78', '#00b4ff', '#6e00ff', '#28ff28'],
-      fn: t => scale(morph([[0, 255, 120], [0, 180, 255], [110, 0, 255], [0, 255, 170], [40, 255, 40]], t, 30), 0.45 + 0.55 * noise(t * 0.6)) },
-    { id: 'underwater', cat: 'nature', name: 'Под водой', src: 'Hue', pal: ['#003cdc', '#0096d2', '#00beaa'],
-      fn: t => scale(morph([[0, 60, 220], [0, 150, 210], [0, 90, 255], [0, 190, 170]], t, 18), 0.6 + 0.4 * noise(t * 2.5)) },
-    { id: 'ocean', cat: 'nature', name: 'Океан', src: 'WLED Pacifica', pal: ['#001e78', '#00aabe', '#0050a0'],
-      fn: t => scale(mix([0, 30, 120], [0, 170, 190], 0.5 + 0.25 * (Math.sin(t * 0.7) + Math.sin(t * 1.3 + 1))), 0.7 + 0.3 * noise(t * 1.5)) },
-    { id: 'lightning', cat: 'nature', name: 'Гроза', src: 'WLED', pal: ['#080a28', '#d2dcff', '#080a28'],
+    { id: 'candle', cat: 'cozy', name: 'Свеча', src: 'Hue · WLED', tau: 0.18, pal: ['#ff5f0c', '#ff9628', '#ff7014'],
+      fn: t => { const n = fbm(t * 1.6); let e = 0.62 + 0.38 * n; e *= 1 - 0.22 * smooth(clamp01((0.32 - noise(t * 0.35 + 9)) / 0.32)); return scale(mix(PAL.candle[0], PAL.candle[1], n), e); } },
+    { id: 'fireplace', cat: 'cozy', name: 'Камин', src: 'Hue', tau: 0.2, pal: ['#ff2800', '#ff6905', '#ffa523'],
+      fn: t => { const n = fbm(t * 1.1), m = fbm(t * 2 + 20); return scale(mix(mix(PAL.fire[0], PAL.fire[1], n), PAL.fire[2], 0.45 * m), 0.55 + 0.45 * m); } },
+    { id: 'flame', cat: 'cozy', name: 'Пламя', src: 'LIFX', tau: 0.15, pal: ['#ff2300', '#ff7a14', '#ffb923'],
+      fn: t => scale(mix(PAL.flame[0], PAL.flame[1], fbm(t * 2.2)), 0.5 + 0.5 * fbm(t * 2.8 + 5)) },
+    { id: 'sunbeam', cat: 'cozy', name: 'Солнечный луч', src: 'Hue', tau: 0.6, pal: ['#ffc378', '#ffe8b9', '#ffd28c'],
+      fn: t => scale(mix(PAL.sunbeam[0], PAL.sunbeam[1], 0.5 + 0.5 * Math.sin(t * 0.25)), 0.82 + 0.14 * Math.sin(t * 0.6) + 0.04 * noise(t * 1.2)) },
+    { id: 'sunset', cat: 'cozy', name: 'Закат', src: 'LIFX', tau: 0.8, pal: ['#ff9628', '#ff501e', '#c81e46', '#5a146e'],
+      fn: t => morph(PAL.sunset, t, 70) },
+    { id: 'opal', cat: 'cozy', name: 'Опал', src: 'Hue', tau: 0.8, pal: ['#ffc8b4', '#c8b4ff', '#b4e6ff', '#ffe6c8'],
+      fn: t => scale(morph(PAL.opal, t, 45), 0.95) },
+    { id: 'lava', cat: 'cozy', name: 'Лавовая лампа', src: 'классика', tau: 0.6, pal: ['#ff1e50', '#ff5a00', '#c80078'],
+      fn: t => scale(morph(PAL.lava, t + 1.5 * Math.sin(t * 0.18), 22), 0.85 + 0.15 * Math.sin(t * 0.45)) },
+    { id: 'aurora', cat: 'nature', name: 'Сияние', src: 'WLED Aurora', tau: 0.6, pal: ['#00ff78', '#00b4ff', '#6e00ff', '#28ff28'],
+      fn: t => scale(morph(PAL.aurora, t, 32), 0.6 + 0.4 * fbm(t * 0.3)) },
+    { id: 'underwater', cat: 'nature', name: 'Под водой', src: 'Hue', tau: 0.45, pal: ['#003cdc', '#0096d2', '#00beaa'],
+      fn: t => scale(morph(PAL.under, t, 20), 0.7 + 0.3 * fbm(t * 0.8)) },
+    { id: 'ocean', cat: 'nature', name: 'Океан', src: 'WLED Pacifica', tau: 0.5, pal: ['#001e78', '#00aabe', '#0050a0'],
+      fn: t => scale(mix(PAL.ocean[0], PAL.ocean[1], 0.5 + 0.25 * (Math.sin(t * 0.55) + Math.sin(t * 0.95 + 1))), 0.75 + 0.25 * fbm(t * 0.9)) },
+    { id: 'lightning', cat: 'nature', name: 'Гроза', src: 'WLED', tau: 0.04, pal: ['#0a0c2d', '#d7e1ff', '#0a0c2d'],
       fn: (t, m) => {
-        if (m.next === undefined) m.next = t + 1;
-        if (t >= m.next) { m.end = t + 0.15 + 0.35 * hash(t); m.next = m.end + 1.5 + 6 * hash(t + 1); }
-        if (m.end && t < m.end) return scale([210, 220, 255], hash(Math.floor(t * 22)) > 0.45 ? 1 : 0.15);
-        return scale([10, 12, 45], 0.8 + 0.2 * noise(t));
+        if (m.next === undefined) m.next = t + 1.2;
+        if (t >= m.next) { m.start = t; m.len = 0.35 + 0.4 * hash(t); m.next = t + m.len + 2 + 6 * hash(t + 1); }
+        const base = scale(PAL.storm[0], 0.85 + 0.15 * noise(t * 0.5));
+        if (m.start !== undefined && t < m.start + m.len) {
+          const x = t - m.start;
+          return mix(base, PAL.storm[1], clamp01(Math.exp(-x / (m.len * 0.45)) * (0.55 + 0.45 * noise(x * 7 + m.start))));
+        }
+        return base;
       } },
-    { id: 'clouds', cat: 'nature', name: 'Облака', src: 'LIFX', pal: ['#6ea0ff', '#c8dcff', '#e6ebff'],
-      fn: t => morph([[110, 160, 255], [200, 220, 255], [140, 180, 255], [230, 235, 255]], t + noise(t * 0.3) * 3, 24) },
-    { id: 'forest', cat: 'nature', name: 'Лес', src: 'классика', pal: ['#14c81e', '#5aff00', '#00963c'],
-      fn: t => scale(morph([[20, 200, 30], [90, 255, 0], [0, 150, 60], [40, 230, 80]], t, 20), 0.6 + 0.4 * noise(t * 1.8)) },
-    { id: 'cosmos', cat: 'nature', name: 'Космос', src: 'Hue', pal: ['#28008c', '#0a1464', '#6400aa'],
-      fn: t => mix(scale(morph([[40, 0, 140], [10, 20, 100], [100, 0, 170], [0, 40, 140]], t, 30), 0.7 + 0.3 * noise(t * 0.8)), [180, 200, 255], sparkle(t, 3, 6) * 0.8) },
-    { id: 'stars', cat: 'nature', name: 'Звёзды', src: 'Hue Sparkle · WLED', pal: ['#1e2350', '#ffffff', '#1e2350'],
-      fn: t => { const s = sparkle(t, 11, 8); return mix(scale([120, 140, 255], 0.22), [255, 255, 255], s); } },
-    { id: 'rainbow', cat: 'party', name: 'Радуга', src: 'WLED Colorloop', pal: ['#ff0000', '#ffff00', '#00ff00', '#00ffff', '#0000ff', '#ff00ff'],
-      fn: t => hsv(t * 36, 1, 1) },
-    { id: 'prism', cat: 'party', name: 'Призма', src: 'Hue', pal: ['#ff0050', '#ffb400', '#00ff64', '#0064ff', '#b400ff'],
-      fn: t => { const p = [[255, 0, 80], [255, 180, 0], [0, 255, 100], [0, 100, 255], [180, 0, 255], [255, 0, 200]]; const x = t / 2, i = Math.floor(x), f = x - i; return mix(p[i % 6], p[(i + 1) % 6], f < 0.75 ? 0 : smooth((f - 0.75) / 0.25)); } },
-    { id: 'disco', cat: 'party', name: 'Диско', src: 'классика', pal: ['#ff00c8', '#00ffd0', '#ffee00', '#7a00ff'],
-      fn: t => hsv(hash(Math.floor(t * 2.5)) * 360, 1, 1) },
-    { id: 'synthwave', cat: 'party', name: 'Синтвейв', src: 'классика', pal: ['#ff00c8', '#00e6ff'],
-      fn: t => mix([255, 0, 200], [0, 230, 255], 0.5 + 0.5 * Math.sin(t * 1.6)) },
-    { id: 'police', cat: 'party', name: 'Полиция', src: 'классика', pal: ['#ff0000', '#0000ff'],
-      fn: t => { const p = (t * 1.2) % 1, on = ((p % 0.5) * 6) % 1 < 0.55; return on ? (p < 0.5 ? [255, 0, 0] : [0, 30, 255]) : [0, 0, 0]; } },
-    { id: 'strobe', cat: 'party', name: 'Стробоскоп', src: 'WLED', pal: ['#ffffff', '#000000', '#ffffff'],
-      fn: t => ((t * 3) % 1 < 0.4 ? [255, 255, 255] : [0, 0, 0]) },
-    { id: 'heartbeat', cat: 'party', name: 'Сердцебиение', src: 'WLED', pal: ['#ff0028', '#300008', '#ff0028'],
-      fn: t => { const p = (t * 1.1) % 1; const v = Math.max(Math.exp(-Math.pow((p - 0.06) / 0.05, 2)), 0.7 * Math.exp(-Math.pow((p - 0.28) / 0.06, 2))); return scale([255, 0, 40], 0.12 + 0.88 * v); } },
-    { id: 'enchant', cat: 'party', name: 'Волшебство', src: 'Hue', pal: ['#ff78c8', '#b45aff', '#ffbe6e'],
-      fn: t => mix(scale(morph([[255, 120, 200], [180, 90, 255], [255, 190, 110], [255, 150, 220]], t, 25), 0.75 + 0.25 * Math.sin(t * 1.3)), [255, 220, 150], sparkle(t, 7, 5) * 0.6) },
-    { id: 'breathe', cat: 'mine', name: 'Дыхание', src: 'WLED · твой цвет', mine: true,
-      fn: t => scale(state.color, 0.12 + 0.88 * (0.5 - 0.5 * Math.cos(t * 1.2))) },
-    { id: 'glisten', cat: 'mine', name: 'Блеск', src: 'Hue · твой цвет', mine: true,
-      fn: t => mix(scale(state.color, 0.7 + 0.3 * noise(t * 6)), [255, 255, 255], sparkle(t, 5, 9) * 0.45) },
-    { id: 'sunrise', cat: 'calm', name: 'Рассвет 15 мин', src: 'WLED · LIFX', realtime: true, pal: ['#280000', '#ff2800', '#ff9632', '#fff0dc'],
-      fn: t => { const u = Math.min(1, t / 900), stops = [[40, 0, 0], [255, 40, 0], [255, 120, 20], [255, 200, 120], [255, 240, 220]]; const x = u * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(x)); return scale(mix(stops[i], stops[i + 1], x - i), 0.05 + 0.95 * u); } },
-    { id: 'breath426', cat: 'calm', name: 'Дыхание 4-2-6', src: 'медитация', realtime: true, pal: ['#5a6eff', '#965aff'],
-      fn: t => { const p = t % 12; const v = p < 4 ? 0.15 + 0.85 * smooth(p / 4) : p < 6 ? 1 : 1 - 0.85 * smooth((p - 6) / 6); return scale(mix([90, 110, 255], [150, 90, 255], p < 6 ? p / 6 : (12 - p) / 6), v); } }
+    { id: 'clouds', cat: 'nature', name: 'Облака', src: 'LIFX', tau: 0.8, pal: ['#6ea0ff', '#c8dcff', '#e6ebff'],
+      fn: t => morph(PAL.clouds, t + fbm(t * 0.25) * 3, 26) },
+    { id: 'forest', cat: 'nature', name: 'Лес', src: 'классика', tau: 0.5, pal: ['#14c81e', '#5aff00', '#00963c'],
+      fn: t => scale(morph(PAL.forest, t, 22), 0.7 + 0.3 * fbm(t * 0.6)) },
+    { id: 'cosmos', cat: 'nature', name: 'Космос', src: 'Hue', tau: 0.35, pal: ['#28008c', '#0a1464', '#6400aa'],
+      fn: t => mix(scale(morph(PAL.cosmos, t, 32), 0.75 + 0.25 * fbm(t * 0.5)), PAL.star[0], 0.7 * twinkle(t, 3, 1.3)) },
+    { id: 'stars', cat: 'nature', name: 'Звёзды', src: 'Hue Sparkle · WLED', tau: 0.3, pal: ['#1e2350', '#ffffff', '#1e2350'],
+      fn: t => mix(scale(PAL.star[1], 0.5), WHITE, twinkle(t, 11, 1.8)) },
+    { id: 'rainbow', cat: 'party', name: 'Радуга', src: 'WLED Colorloop', tau: 0.1, pal: ['#ff0000', '#ffff00', '#00ff00', '#00ffff', '#0000ff', '#ff00ff'],
+      fn: t => hueP(t * 30) },
+    { id: 'prism', cat: 'party', name: 'Призма', src: 'Hue', tau: 0.25, pal: ['#ff0050', '#ffb400', '#00ff64', '#0064ff', '#b400ff'],
+      fn: t => { const x = t / 2.6, i = Math.floor(x), f = x - i; return mix(PAL.prism[i % 6], PAL.prism[(i + 1) % 6], f < 0.55 ? 0 : smooth((f - 0.55) / 0.45)); } },
+    { id: 'disco', cat: 'party', name: 'Диско', src: 'классика', tau: 0.1, pal: ['#ff00c8', '#00ffd0', '#ffee00', '#7a00ff'],
+      fn: t => { const x = t * 1.6, i = Math.floor(x), f = x - i; return mix(hueP(hash(i) * 360), hueP(hash(i + 1) * 360), f < 0.65 ? 0 : smooth((f - 0.65) / 0.35)); } },
+    { id: 'synthwave', cat: 'party', name: 'Синтвейв', src: 'классика', tau: 0.3, pal: ['#ff00c8', '#00e6ff'],
+      fn: t => mix(PAL.synth[0], PAL.synth[1], 0.5 + 0.5 * Math.sin(t * 0.8)) },
+    { id: 'police', cat: 'party', name: 'Полиция', src: 'резкий', tau: 0, pal: ['#ff0000', '#0000ff'],
+      fn: t => { const p = t % 1; return p < 0.42 ? PAL.police[0] : p < 0.5 ? OFF : p < 0.92 ? PAL.police[1] : OFF; } },
+    { id: 'strobe', cat: 'party', name: 'Стробоскоп', src: 'WLED · резкий', tau: 0, pal: ['#ffffff', '#000000', '#ffffff'],
+      fn: t => ((t * 2.5) % 1 < 0.4 ? WHITE : OFF) },
+    { id: 'heartbeat', cat: 'party', name: 'Сердцебиение', src: 'WLED', tau: 0.07, pal: ['#ff0028', '#300008', '#ff0028'],
+      fn: t => { const p = (t * 1.1) % 1; return scale(PAL.heart[0], 0.3 + 0.7 * Math.max(gauss(p, 0.08, 0.08), 0.75 * gauss(p, 0.32, 0.09))); } },
+    { id: 'enchant', cat: 'party', name: 'Волшебство', src: 'Hue', tau: 0.4, pal: ['#ff78c8', '#b45aff', '#ffbe6e'],
+      fn: t => mix(scale(morph(PAL.enchant, t, 26), 0.82 + 0.18 * Math.sin(t * 1.1)), PAL.gold[0], 0.55 * twinkle(t, 7, 1.2)) },
+    { id: 'breathe', cat: 'mine', name: 'Дыхание', src: 'WLED · твой цвет', tau: 0.1, mine: true,
+      fn: t => scale(P(state.color), 0.28 + 0.72 * (0.5 - 0.5 * Math.cos(t))) },
+    { id: 'glisten', cat: 'mine', name: 'Блеск', src: 'Hue · твой цвет', tau: 0.25, mine: true,
+      fn: t => mix(scale(P(state.color), 0.8 + 0.2 * fbm(t * 1.5)), WHITE, 0.45 * twinkle(t, 5, 1.6)) },
+    { id: 'sunrise', cat: 'calm', name: 'Рассвет 15 мин', src: 'WLED · LIFX', tau: 1, realtime: true, pal: ['#280000', '#ff2800', '#ff9632', '#fff0dc'],
+      fn: t => { const u = Math.min(1, t / 900), s = PAL.sunrise, x = u * (s.length - 1), i = Math.min(s.length - 2, Math.floor(x)); return scale(mix(s[i], s[i + 1], x - i), 0.12 + 0.88 * u); } },
+    { id: 'breath426', cat: 'calm', name: 'Дыхание 4-2-6', src: 'медитация', tau: 0.2, realtime: true, pal: ['#5a6eff', '#965aff'],
+      fn: t => { const p = t % 12, e = p < 4 ? 0.3 + 0.7 * smooth(p / 4) : p < 6 ? 1 : 1 - 0.7 * smooth((p - 6) / 6); return scale(mix(PAL.breath[0], PAL.breath[1], p < 6 ? p / 6 : (12 - p) / 6), e); } }
   ];
   const softById = id => SOFT.find(f => f.id === id);
   const softGradient = fx => fx.mine ? `linear-gradient(135deg, ${toHex(state.color)}, #111)` : `linear-gradient(135deg, ${fx.pal.join(', ')})`;
+  const speedK = () => 0.2 + state.speed / 62.5;            // 0.2× … 1.8×, 1× at the middle
+  const smoothK = () => Math.max(0.15, (state.smooth ?? 50) / 50);  // 0.15× … 2×
+
+  // advances an effect by dt seconds through its smoothing filter; shared by the live loop and the self-test
+  function softStep(fx, mem, dt) {
+    mem.clock = (mem.clock || 0) + dt * (fx.realtime ? 1 : speedK());
+    const target = fx.fn(mem.clock, mem);
+    let tau = (fx.tau || 0) * smoothK();
+    if (mem.blend > 0) { tau = Math.max(tau, 0.3); mem.blend -= dt; }   // soft hand-over between effects
+    if (!mem.out || tau <= 0) mem.out = target.slice();
+    else { const a = 1 - Math.exp(-dt / tau); mem.out = mem.out.map((v, i) => v + (target[i] - v) * a); }
+    return encode(mem.out);
+  }
 
   /* ---------- colour helpers ---------- */
   function hsvToRgb(h, s, v) {
@@ -470,7 +529,7 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
 
   /* ---------- state ---------- */
   const state = Object.assign(
-    { on: true, mode: 'color', color: [31, 91, 255], hue: 223, sat: 0.88, brightness: 80, effect: 22, speed: 50, soft: 'candle' },
+    { on: true, mode: 'color', color: [31, 91, 255], hue: 223, sat: 0.88, brightness: 80, effect: 22, speed: 50, soft: 'candle', smooth: 50 },
     store.get('lamp.state', {})
   );
   let customScenes = store.get('lamp.scenes', []);
@@ -479,8 +538,11 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
 
   /* ---------- Bluetooth link ---------- */
   let device = null, ch = null, ready = false, manualDisconnect = false, reconnecting = false;
-  const queue = [];
-  let pumping = false;
+  // transport: one write in flight, commands first, then the freshest effect frame; never a backlog
+  const cmdQueue = [];
+  const MIN_GAP = 40;              // ms between writes, up to 25 frames a second
+  let inFlight = false, lastWriteAt = 0, kickTimer = 0, frameSource = null, lastFrame = '';
+  const sentTimes = [];
 
   const SVC = '0000fff0-0000-1000-8000-00805f9b34fb';
   const CHR = '0000fff3-0000-1000-8000-00805f9b34fb';
@@ -502,19 +564,39 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
   function send(bytes, key) {
     showPacket(bytes);
     if (!ready) return;
-    if (key) { const item = queue.find(q => q.key === key); if (item) { item.bytes = bytes; return; } }
-    queue.push({ key, bytes });
-    pump();
+    if (key) { const item = cmdQueue.find(q => q.key === key); if (item) { item.bytes = bytes; kick(); return; } }
+    cmdQueue.push({ key, bytes });
+    kick();
   }
-  async function pump() {
-    if (pumping) return;
-    pumping = true;
-    while (queue.length && ready) {
-      const { bytes } = queue.shift();
-      try { await rawWrite(bytes); } catch (e) { console.warn('write failed', e); }
-      await sleep(30);
+  function kick(delay) {
+    if (!ready || inFlight || kickTimer) return;
+    const wait = Math.max(delay || 0, MIN_GAP - (performance.now() - lastWriteAt));
+    kickTimer = setTimeout(pumpOne, Math.max(0, wait));
+  }
+  async function pumpOne() {
+    kickTimer = 0;
+    if (!ready || inFlight) return;
+    let bytes = null, isFrame = false;
+    const item = cmdQueue.shift();
+    if (item) { bytes = item.bytes; lastFrame = ''; }
+    else if (frameSource) {
+      const f = frameSource();
+      if (f) { const key = f.join(','); if (key !== lastFrame) { bytes = f; lastFrame = key; isFrame = true; } }
     }
-    pumping = false;
+    if (!bytes) { if (frameSource) kickTimer = setTimeout(pumpOne, 16); return; }   // nothing new yet: look again next screen frame
+    inFlight = true;
+    lastWriteAt = performance.now();   // pace from the start of a write, so a slow link isn't slowed down twice
+    try { await rawWrite(bytes); } catch (e) { console.warn('write failed', e); }
+    const t = performance.now();
+    inFlight = false;
+    sentTimes.push(t);
+    while (sentTimes.length && t - sentTimes[0] > 1000) sentTimes.shift();
+    if (isFrame) showPacket(bytes);
+    if (cmdQueue.length || frameSource) kick();
+  }
+  function resetTransport() {
+    cmdQueue.length = 0; frameSource = null; inFlight = false; lastFrame = '';
+    clearTimeout(kickTimer); kickTimer = 0; sentTimes.length = 0;
   }
 
   function setStatus(s, text) { const el = $('#status'); el.dataset.s = s; el.textContent = text; }
@@ -584,7 +666,7 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
   }
 
   function onDisconnect() {
-    ready = false; ch = null; queue.length = 0;
+    ready = false; ch = null; resetTransport();
     showPacket(null);
     if (manualDisconnect) {
       setStatus('idle', 'Не подключено');
@@ -624,20 +706,27 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
     syncWake();
   }
 
-  /* software effect loop: paints the tube every frame, sends to the lamp ~12 times a second */
-  let softRAF = 0, softMem = {}, softLastSend = 0;
+  /* software effect loop: computes and paints every screen frame; the transport pulls
+     the freshest colour whenever the Bluetooth link is free (up to 25 times a second) */
+  let softRAF = 0, softMem = {}, softLastPreview = 0;
   function startSoft(id) {
     if (mic) stopMic();
+    const from = state.mode === 'soft' && softMem.out ? softMem.out : P(state.mode === 'color' ? state.color : [0, 0, 0]);
     ensureOn();
     state.mode = 'soft';
     state.soft = id;
-    softMem = {};
+    softMem = { out: from.slice(), blend: 0.6 };   // fade from what the lamp shows now
     runSoft();
     syncWake();
     render();
   }
+  function softFrame() {
+    if (state.mode !== 'soft' || !state.on) { frameSource = null; return null; }
+    return softMem.last ? CMD.color(...softMem.last) : null;
+  }
   function runSoft() {
     if (!softRAF) { softMem.prev = undefined; softRAF = requestAnimationFrame(softTick); }
+    if (ready && !frameSource) { frameSource = softFrame; kick(); }
   }
   function softTick(now) {
     softRAF = 0;
@@ -645,11 +734,10 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
     if (state.mode !== 'soft' || !state.on || !fx) return;
     const dt = softMem.prev === undefined ? 0 : Math.min(0.1, (now - softMem.prev) / 1000);
     softMem.prev = now;
-    softMem.clock = (softMem.clock || 0) + dt * (fx.realtime ? 1 : 0.25 + state.speed / 50);
-    const rgb = fx.fn(softMem.clock, softMem).map(v => Math.max(0, Math.min(255, Math.round(v))));
+    const rgb = softStep(fx, softMem, dt);
     softMem.last = rgb;
     document.documentElement.style.setProperty('--lamp-rgb', rgb.join(','));
-    if (now - softLastSend > 80) { softLastSend = now; send(CMD.color(...rgb), 'color'); }
+    if (!ready && now - softLastPreview > 120) { softLastPreview = now; showPacket(CMD.color(...rgb)); }
     softRAF = requestAnimationFrame(softTick);
   }
 
@@ -680,13 +768,14 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
 
   function applyScene(s) {
     if (mic) stopMic();
+    const from = state.mode === 'soft' && softMem.out ? softMem.out.slice() : P(state.mode === 'color' ? state.color : [0, 0, 0]);
     state.on = true;
     state.brightness = s.brightness;
     if (s.mode === 'color') {
       state.mode = 'color'; state.color = s.color.slice();
       const [h, sat] = rgbToHsv(...state.color); state.hue = h; state.sat = sat;
     } else if (s.mode === 'soft') {
-      state.mode = 'soft'; state.soft = s.soft; state.speed = s.speed; softMem = {};
+      state.mode = 'soft'; state.soft = s.soft; state.speed = s.speed; softMem = { out: from, blend: 0.6 };
       if (s.color) state.color = s.color.slice();
     } else { state.mode = 'effect'; state.effect = s.effect; state.speed = s.speed; }
     applyAll();
@@ -729,6 +818,7 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
     document.querySelectorAll('.fx').forEach(b => b.setAttribute('aria-pressed', String(state.mode === 'effect' && +b.dataset.n === state.effect)));
     $('#fxNum').textContent = '№ ' + state.effect;
     $('#speed').value = state.speed; $('#speedVal').textContent = state.speed;
+    $('#smooth').value = state.smooth; $('#smoothVal').textContent = state.smooth;
     persist();
   }
 
@@ -736,7 +826,7 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
     const p = $('#packet');
     if (bytes) $('#packetHex').textContent = bytesHex(bytes);
     p.dataset.sent = ready ? '1' : '0';
-    $('#packetTag').textContent = ready ? 'отправлен' : 'предпросмотр';
+    $('#packetTag').textContent = ready ? (sentTimes.length > 3 ? 'поток ' + sentTimes.length + ' к/с' : 'отправлен') : 'предпросмотр';
   }
 
   function renderScenes() {
@@ -897,7 +987,7 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
 
   let fxCat = store.get('lamp.fxcat', 'cozy');
   if (!SOFT_CATS.some(c => c[0] === fxCat)) fxCat = 'cozy';
-  const FX_HINT_SOFT = 'Эти эффекты повторяют сцены Philips Hue, LIFX и WLED. Телефон считает их сам и шлёт цвет на лампу 12 раз в секунду, поэтому держи пульт открытым.';
+  const FX_HINT_SOFT = 'Эти эффекты повторяют сцены Philips Hue, LIFX и WLED. Телефон считает их сам и шлёт цвет на лампу до 25 раз в секунду, поэтому держи пульт открытым. Если где-то всё равно дёргает, прибавь плавность.';
   const FX_HINT_LAMP = 'Встроенные эффекты живут в самой лампе и работают без телефона. Номера взяты у похожих контроллеров MELK: если название не совпадает, листай стрелками и сохраняй удачные в сцены.';
   function renderFx() {
     const cats = $('#fxCats'); cats.innerHTML = '';
@@ -909,7 +999,7 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
     });
     const grid = $('#sfxGrid'); grid.innerHTML = '';
     const isLamp = fxCat === 'lamp';
-    grid.hidden = isLamp; $('#hwBox').hidden = !isLamp;
+    grid.hidden = isLamp; $('#hwBox').hidden = !isLamp; $('#smoothField').hidden = isLamp;
     $('#fxHint').textContent = isLamp ? FX_HINT_LAMP : FX_HINT_SOFT;
     SOFT.filter(f => f.cat === fxCat).forEach(fx => {
       const b = document.createElement('button');
@@ -951,6 +1041,7 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
     if (state.mode === 'effect') send(CMD.speed(state.speed), 'speed');
     render();
   });
+  $('#smooth').addEventListener('input', e => { state.smooth = +e.target.value; render(); });
   $('#saveForm').addEventListener('submit', e => {
     e.preventDefault();
     const name = $('#sceneName').value.trim() || 'Сцена ' + (customScenes.length + 1);

@@ -1,0 +1,776 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a0c13">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>Пульт угловой лампы</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Unbounded:wght@500;700&display=swap">
+<style>
+/* Layout: one phone column. Hero = the lamp tube as a live mirror on the left, power/brightness/link stacked beside it; tabbed panels below. Night-only by design: it is used in a dark room. */
+:root{
+  --bg:#0a0c13;
+  --surface:#121624;
+  --surface-2:#1b2032;
+  --line:#262d42;
+  --fg:#e9ecf6;
+  --muted:#8b93ab;
+  --dim:#5c6479;
+  --ok:#3fd99a;
+  --warn:#ffb648;
+  --err:#ff6070;
+  --lamp-rgb:31,91,255;
+  --glow:.8;
+  --f-display:"Unbounded","Golos Text",system-ui,sans-serif;
+  --f-body:"Golos Text",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+html,body{background:var(--bg);min-height:100%}
+body{
+  color:var(--fg);font-family:var(--f-body);font-size:15px;line-height:1.45;
+  padding-left:max(16px,env(safe-area-inset-left,0px));
+  padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-block:14px 48px;
+  -webkit-tap-highlight-color:transparent;
+}
+.ambient{position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:radial-gradient(90% 55% at 12% 8%,rgba(var(--lamp-rgb),calc(.20*var(--glow))),transparent 65%);
+  transition:background .4s}
+.wrap{position:relative;z-index:1;max-width:560px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid rgba(var(--lamp-rgb),.9);outline-offset:3px}
+
+/* header */
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.top h1{font-family:var(--f-display);font-weight:700;font-size:19px;letter-spacing:.01em;margin:0;text-wrap:balance}
+.sub{font-family:var(--f-mono);font-size:11px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;margin-top:3px}
+.pill{display:inline-flex;align-items:center;gap:7px;padding:6px 11px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font-size:12.5px;color:var(--muted);white-space:nowrap;flex-shrink:0}
+.pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.pill[data-s="ok"]{color:var(--ok)}
+.pill[data-s="busy"]{color:var(--warn)}
+.pill[data-s="err"]{color:var(--err)}
+
+/* hero */
+.hero{display:grid;grid-template-columns:76px minmax(0,1fr);gap:18px}
+.tube-wrap{position:relative;display:flex;flex-direction:column;align-items:center;padding-top:6px}
+.tube{position:relative;flex:1;width:16px;min-height:310px;border-radius:9px;overflow:hidden;
+  background:rgb(var(--lamp-rgb));opacity:calc(.3 + .7*var(--glow));
+  box-shadow:0 0 16px 3px rgba(var(--lamp-rgb),calc(.6*var(--glow))),0 0 64px 20px rgba(var(--lamp-rgb),calc(.28*var(--glow)));
+  transition:background .3s,box-shadow .3s,opacity .3s}
+.tube::after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(to bottom,rgba(255,255,255,.22) 0 3px,rgba(0,0,0,.08) 3px 7px)}
+.tube.fx{background:linear-gradient(to bottom,#ff2d55,#ff9f0a,#ffd60a,#30d158,#00c7e6,#2f5bff,#bf5af2,#ff2d55);background-size:100% 200%;animation:flow var(--fx-dur,4s) linear infinite}
+.tube.off{background:#262b3b;box-shadow:none;opacity:1;animation:none}
+@keyframes flow{to{background-position:0 200%}}
+.stand{width:34px;height:6px;border-radius:50%;background:#1d2232;margin-top:8px}
+
+.side{display:flex;flex-direction:column;gap:16px;min-width:0}
+.power-row{display:flex;align-items:center;gap:14px}
+.power{flex-shrink:0;width:64px;height:64px;border-radius:50%;border:1px solid var(--line);background:var(--surface);color:var(--muted);display:grid;place-items:center;cursor:pointer;transition:box-shadow .25s,border-color .25s,color .25s}
+.power[aria-pressed="true"]{color:#fff;border-color:rgba(var(--lamp-rgb),.75);box-shadow:0 0 0 4px rgba(var(--lamp-rgb),.16),inset 0 0 20px rgba(var(--lamp-rgb),.4)}
+.state-text{min-width:0}
+.state-text strong{display:block;font-family:var(--f-display);font-weight:500;font-size:15px}
+.state-text span{display:block;color:var(--muted);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.field{display:flex;flex-direction:column;gap:6px}
+.field-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.label{font-size:12px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.val{font-family:var(--f-mono);font-size:13px;font-variant-numeric:tabular-nums;color:var(--fg)}
+
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:30px;background:transparent;margin:0;cursor:pointer}
+input[type=range]::-webkit-slider-runnable-track{height:10px;border-radius:999px;background:var(--track,var(--surface-2));border:1px solid var(--line)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:24px;height:24px;border-radius:50%;background:#f4f6fb;margin-top:-8px;border:0;box-shadow:0 1px 6px rgba(0,0,0,.6)}
+input[type=range]::-moz-range-track{height:10px;border-radius:999px;background:var(--track,var(--surface-2));border:1px solid var(--line)}
+input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#f4f6fb;border:0}
+#bri{--track:linear-gradient(90deg,#161a26,rgb(var(--lamp-rgb)))}
+#hue{--track:linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)}
+#sat{--track:linear-gradient(90deg,#fff,var(--hue-color,#00f))}
+#speed{--track:linear-gradient(90deg,#161a26,#8b93ab)}
+#sens{--track:linear-gradient(90deg,#161a26,#8b93ab)}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 16px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:var(--fg);font-weight:500;cursor:pointer}
+.btn.primary{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.btn.small{min-height:36px;padding:0 12px;font-size:13.5px;border-radius:10px}
+.btn:disabled{opacity:.45;cursor:default}
+.hint{font-size:13px;color:var(--muted);line-height:1.4}
+.hint.err{color:var(--err)}
+
+.packet{display:flex;flex-direction:column;gap:4px;padding:9px 11px;border-radius:10px;background:var(--surface);border:1px solid var(--line)}
+.packet-head{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--dim);letter-spacing:.06em;text-transform:uppercase}
+.packet code{font-family:var(--f-mono);font-size:12px;color:var(--muted);white-space:nowrap;overflow-x:auto;display:block}
+.packet[data-sent="1"] code{color:var(--fg)}
+
+/* tabs */
+.tabs{display:flex;gap:4px;padding:4px;background:var(--surface);border:1px solid var(--line);border-radius:13px;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{flex:1 1 auto;padding:9px 6px;border-radius:9px;border:0;background:transparent;color:var(--muted);font-weight:500;font-size:13.5px;cursor:pointer;white-space:nowrap}
+.tab[aria-selected="true"]{background:var(--surface-2);color:var(--fg)}
+.panel{display:flex;flex-direction:column;gap:18px}
+
+/* color */
+.swatches{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
+.sw{aspect-ratio:1;max-width:100%;border-radius:50%;border:0;cursor:pointer;background:var(--c);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+.sw[aria-pressed="true"]{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--fg)}
+.custom-row{display:flex;align-items:center;gap:12px}
+.custom-row input[type=color]{width:44px;height:44px;border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:3px;cursor:pointer}
+.custom-row .val{color:var(--muted)}
+
+/* effects */
+.fx-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.fx{display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:46px;padding:0 12px;border-radius:11px;border:1px solid var(--line);background:var(--surface);cursor:pointer;text-align:left;font-size:14px}
+.fx small{font-family:var(--f-mono);font-size:11px;color:var(--dim)}
+.fx[aria-pressed="true"]{border-color:rgba(var(--lamp-rgb),.8);background:var(--surface-2)}
+.stepper{display:flex;align-items:center;gap:8px}
+.stepper .num{flex:1;text-align:center;font-family:var(--f-mono);font-size:20px;font-variant-numeric:tabular-nums}
+.stepper .btn{width:48px;padding:0}
+
+/* scenes */
+.scenes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.scene-cell{position:relative;min-width:0}
+.scene.custom{padding-right:32px}
+.scene{width:100%;position:relative;display:flex;align-items:center;gap:11px;padding:12px;border-radius:13px;border:1px solid var(--line);background:var(--surface);cursor:pointer;text-align:left;min-width:0}
+.chip{flex-shrink:0;width:30px;height:30px;border-radius:50%;background:var(--c);box-shadow:0 0 14px var(--c)}
+.chip.rainbow{background:conic-gradient(#ff2d55,#ffd60a,#30d158,#00c7e6,#2f5bff,#bf5af2,#ff2d55);box-shadow:none}
+.scene b{display:block;font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.scene span{display:block;color:var(--muted);font-size:12px}
+.scene-txt{min-width:0}
+.del{position:absolute;top:4px;right:4px;width:26px;height:26px;border-radius:8px;border:0;background:transparent;color:var(--dim);cursor:pointer;font-size:16px;line-height:1}
+.save-row{display:flex;gap:8px}
+.save-row input{flex:1;min-width:0;min-height:44px;padding:0 12px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:var(--fg);font:inherit}
+
+/* timer */
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.check{display:flex;align-items:center;gap:10px;font-size:14px;cursor:pointer}
+.check input{width:20px;height:20px;accent-color:#e9ecf6}
+.countdown{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px;border-radius:13px;background:var(--surface);border:1px solid var(--line)}
+.countdown .big{font-family:var(--f-mono);font-size:30px;font-variant-numeric:tabular-nums;letter-spacing:.02em}
+
+/* music */
+.meter{height:12px;border-radius:999px;background:var(--surface-2);border:1px solid var(--line);overflow:hidden}
+.meter i{display:block;height:100%;width:0;background:rgb(var(--lamp-rgb));transition:width .08s}
+
+.help{border-top:1px solid var(--line);padding-top:16px;color:var(--muted);font-size:13.5px}
+.help summary{cursor:pointer;color:var(--fg);font-weight:500}
+.help ol{padding-left:20px;margin:10px 0 0;display:flex;flex-direction:column;gap:6px;max-width:65ch}
+
+.toast{position:fixed;left:50%;bottom:calc(18px + env(safe-area-inset-bottom,0px));transform:translate(-50%,16px);opacity:0;pointer-events:none;z-index:20;
+  padding:10px 16px;border-radius:12px;background:var(--fg);color:var(--bg);font-size:14px;font-weight:500;max-width:calc(100vw - 32px);transition:opacity .2s,transform .2s}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+
+@media (prefers-reduced-motion:reduce){.tube.fx{animation:none}*{transition:none!important}}
+@media (max-width:360px){.swatches{grid-template-columns:repeat(4,minmax(0,1fr))}}
+</style>
+</head>
+<body>
+
+<div class="ambient" aria-hidden="true"></div>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Угловая лампа</h1>
+      <div class="sub" id="devName">MELK-OT21 · BLE</div>
+    </div>
+    <div class="pill" id="status" data-s="idle">Не подключено</div>
+  </header>
+
+  <section class="hero" aria-label="Лампа">
+    <div class="tube-wrap" aria-hidden="true">
+      <div class="tube" id="tube"></div>
+      <div class="stand"></div>
+    </div>
+    <div class="side">
+      <div class="power-row">
+        <button class="power" id="power" aria-pressed="true" aria-label="Включить или выключить лампу">
+          <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v8"/><path d="M6.4 6.6a8 8 0 1 0 11.2 0"/></svg>
+        </button>
+        <div class="state-text">
+          <strong id="stateTitle">Включена</strong>
+          <span id="stateSub">Цвет · 80%</span>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-head"><label class="label" for="bri">Яркость</label><span class="val" id="briVal">80%</span></div>
+        <input type="range" id="bri" min="1" max="100" value="80">
+      </div>
+
+      <div class="field">
+        <button class="btn primary" id="connectBtn">Подключить лампу</button>
+        <div class="hint" id="hint">Пока лампа не подключена, всё работает в режиме предпросмотра</div>
+      </div>
+
+      <div class="packet" id="packet" data-sent="0">
+        <div class="packet-head"><span>Пакет · FFF3</span><span id="packetTag">предпросмотр</span></div>
+        <code id="packetHex">—</code>
+      </div>
+    </div>
+  </section>
+
+  <nav class="tabs" role="tablist" aria-label="Разделы">
+    <button class="tab" role="tab" id="t-color" aria-controls="p-color" aria-selected="true">Цвет</button>
+    <button class="tab" role="tab" id="t-fx" aria-controls="p-fx" aria-selected="false">Эффекты</button>
+    <button class="tab" role="tab" id="t-scenes" aria-controls="p-scenes" aria-selected="false">Сцены</button>
+    <button class="tab" role="tab" id="t-timer" aria-controls="p-timer" aria-selected="false">Таймер</button>
+    <button class="tab" role="tab" id="t-music" aria-controls="p-music" aria-selected="false">Музыка</button>
+  </nav>
+
+  <section class="panel" id="p-color" role="tabpanel" aria-labelledby="t-color">
+    <div class="swatches" id="swatches"></div>
+    <div class="field">
+      <div class="field-head"><label class="label" for="hue">Оттенок</label><span class="val" id="hueVal">223°</span></div>
+      <input type="range" id="hue" min="0" max="359" value="223">
+    </div>
+    <div class="field">
+      <div class="field-head"><label class="label" for="sat">Насыщенность</label><span class="val" id="satVal">88%</span></div>
+      <input type="range" id="sat" min="0" max="100" value="88">
+    </div>
+    <div class="custom-row">
+      <input type="color" id="picker" value="#1f5bff" aria-label="Точный цвет">
+      <div>
+        <div class="label">Точный цвет</div>
+        <div class="val" id="hexVal">#1F5BFF</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="p-fx" role="tabpanel" aria-labelledby="t-fx" hidden>
+    <div class="fx-grid" id="fxGrid"></div>
+    <div class="field">
+      <div class="field-head"><span class="label">Листать все эффекты</span><span class="val">0–255</span></div>
+      <div class="stepper">
+        <button class="btn" id="fxPrev" aria-label="Предыдущий эффект">‹</button>
+        <div class="num" id="fxNum">№ 22</div>
+        <button class="btn" id="fxNext" aria-label="Следующий эффект">›</button>
+      </div>
+    </div>
+    <div class="field">
+      <div class="field-head"><label class="label" for="speed">Скорость</label><span class="val" id="speedVal">50</span></div>
+      <input type="range" id="speed" min="0" max="100" value="50">
+    </div>
+    <p class="hint">Номера эффектов взяты у похожих контроллеров MELK. Если название не совпадает с тем, что делает лампа, листай номера стрелками и сохраняй удачные в сцены.</p>
+  </section>
+
+  <section class="panel" id="p-scenes" role="tabpanel" aria-labelledby="t-scenes" hidden>
+    <div class="scenes" id="scenes"></div>
+    <div class="field">
+      <label class="label" for="sceneName">Сохранить текущий свет</label>
+      <form class="save-row" id="saveForm">
+        <input id="sceneName" maxlength="24" placeholder="Например, «Свидание»" autocomplete="off">
+        <button class="btn" type="submit">Сохранить</button>
+      </form>
+    </div>
+  </section>
+
+  <section class="panel" id="p-timer" role="tabpanel" aria-labelledby="t-timer" hidden>
+    <div class="field">
+      <span class="label">Выключить через</span>
+      <div class="chips" id="timerChips">
+        <button class="btn small" data-min="15">15 мин</button>
+        <button class="btn small" data-min="30">30 мин</button>
+        <button class="btn small" data-min="60">1 час</button>
+        <button class="btn small" data-min="90">1,5 часа</button>
+      </div>
+    </div>
+    <label class="check"><input type="checkbox" id="fade" checked> Плавно гасить последние 10 минут</label>
+    <div class="countdown" id="countdown" hidden>
+      <div>
+        <div class="label">До выключения</div>
+        <div class="big" id="cdText">30:00</div>
+      </div>
+      <button class="btn small" id="cdCancel">Отменить</button>
+    </div>
+    <p class="hint">Таймер работает, пока страница открыта и экран не заблокирован: iPhone рвёт Bluetooth у браузера в фоне. Экран будет держаться включённым, если браузер это позволит.</p>
+  </section>
+
+  <section class="panel" id="p-music" role="tabpanel" aria-labelledby="t-music" hidden>
+    <button class="btn primary" id="micBtn">Слушать музыку через микрофон</button>
+    <div class="field">
+      <div class="field-head"><span class="label">Уровень</span><span class="val" id="micState">выкл</span></div>
+      <div class="meter"><i id="meter"></i></div>
+    </div>
+    <div class="field">
+      <div class="field-head"><label class="label" for="sens">Чувствительность</label><span class="val" id="sensVal">50</span></div>
+      <input type="range" id="sens" min="10" max="100" value="50">
+    </div>
+    <p class="hint" id="micHint">Телефон слушает басы: на каждый удар меняется цвет, громкость управляет яркостью. Положи телефон ближе к колонке.</p>
+  </section>
+
+  <details class="help">
+    <summary>Как запустить на iPhone</summary>
+    <ol>
+      <li>Safari не даёт сайтам доступ к Bluetooth. Поставь бесплатный браузер Bluefy из App Store.</li>
+      <li>Открой в Bluefy прямую https-ссылку на эту страницу.</li>
+      <li>Закрой LightBlue и другие приложения для лампы: она держит только одно подключение.</li>
+      <li>Нажми «Подключить лампу» и выбери MELK-OT21 в списке.</li>
+    </ol>
+  </details>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+  };
+
+  /* ---------- MELK protocol (write to 0xFFF3 in service 0xFFF0) ---------- */
+  const CMD = {
+    login1: [0x7e, 0x07, 0x83],
+    login2: [0x7e, 0x04, 0x04],
+    time: () => { const d = new Date(); return [0x7e, 0x00, 0x83, d.getHours(), d.getMinutes(), d.getSeconds(), d.getDay() || 7, 0x00, 0xef]; },
+    on:  [0x7e, 0x00, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0xef],
+    off: [0x7e, 0x00, 0x04, 0x00, 0x00, 0x00, 0xff, 0x00, 0xef],
+    color: (r, g, b) => [0x7e, 0x00, 0x05, 0x03, r, g, b, 0x00, 0xef],
+    bri: i => [0x7e, 0x04, 0x01, i, 0xff, 0x00, 0xff, 0x00, 0xef],
+    effect: v => [0x7e, 0x05, 0x03, v, 0x06, 0xff, 0xff, 0x00, 0xef],
+    speed: v => [0x7e, 0x04, 0x02, v, 0xff, 0xff, 0xff, 0x00, 0xef]
+  };
+
+  const SWATCHES = [
+    ['#ff0000', 'Красный'], ['#ff5a00', 'Оранжевый'], ['#ffb000', 'Янтарный'], ['#ffee00', 'Жёлтый'],
+    ['#00ff40', 'Зелёный'], ['#00ffd0', 'Бирюзовый'], ['#00a0ff', 'Голубой'], ['#0030ff', 'Синий'],
+    ['#7a00ff', 'Фиолетовый'], ['#ff00c8', 'Розовый'], ['#ffffff', 'Белый'], ['#ffb46b', 'Тёплый белый']
+  ];
+  const EFFECTS = [
+    [0, 'Смена цветов'], [1, 'Мягкий перелив'], [22, 'Радуга'], [10, 'Бегущая радуга'],
+    [16, 'Быстрый бег'], [5, 'RGB-перелив'], [26, 'Красный перелив'], [28, 'Зелёный перелив'],
+    [33, 'Голубой перелив'], [75, 'Белая волна'], [58, 'Встречный бег'], [77, 'Плавный бег'],
+    [155, 'Красно-белый ←'], [156, 'Красно-белый →'], [151, 'Бело-синий ←'], [152, 'Бело-синий →']
+  ];
+  const DEFAULT_SCENES = [
+    { id: 'evening', name: 'Вечер', mode: 'color', color: [255, 110, 25], brightness: 35 },
+    { id: 'work', name: 'Работа', mode: 'color', color: [255, 255, 255], brightness: 100 },
+    { id: 'movie', name: 'Кино', mode: 'color', color: [25, 45, 255], brightness: 15 },
+    { id: 'night', name: 'Ночник', mode: 'color', color: [255, 60, 0], brightness: 4 },
+    { id: 'neon', name: 'Неон', mode: 'color', color: [255, 0, 170], brightness: 80 },
+    { id: 'rainbow', name: 'Радуга', mode: 'effect', effect: 22, speed: 40, brightness: 70 }
+  ];
+
+  /* ---------- colour helpers ---------- */
+  function hsvToRgb(h, s, v) {
+    const f = n => { const k = (n + h / 60) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); };
+    return [f(5), f(3), f(1)].map(x => Math.round(x * 255));
+  }
+  function rgbToHsv(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+    let h = 0;
+    if (d) {
+      if (max === r) h = ((g - b) / d) % 6; else if (max === g) h = (b - r) / d + 2; else h = (r - g) / d + 4;
+      h = Math.round(h * 60); if (h < 0) h += 360;
+    }
+    return [h, max ? d / max : 0, max];
+  }
+  const toHex = c => '#' + c.map(x => x.toString(16).padStart(2, '0')).join('');
+  const fromHex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  const bytesHex = a => a.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+
+  /* ---------- state ---------- */
+  const state = Object.assign(
+    { on: true, mode: 'color', color: [31, 91, 255], hue: 223, sat: 0.88, brightness: 80, effect: 22, speed: 50 },
+    store.get('lamp.state', {})
+  );
+  let customScenes = store.get('lamp.scenes', []);
+  let saveTimer = 0;
+  const persist = () => { clearTimeout(saveTimer); saveTimer = setTimeout(() => store.set('lamp.state', state), 400); };
+
+  /* ---------- Bluetooth link ---------- */
+  let device = null, ch = null, ready = false, manualDisconnect = false, reconnecting = false;
+  const queue = [];
+  let pumping = false;
+
+  async function rawWrite(bytes) {
+    const data = new Uint8Array(bytes);
+    if (ch.writeValueWithoutResponse) return ch.writeValueWithoutResponse(data);
+    return ch.writeValue(data);
+  }
+  function send(bytes, key) {
+    showPacket(bytes);
+    if (!ready) return;
+    if (key) { const item = queue.find(q => q.key === key); if (item) { item.bytes = bytes; return; } }
+    queue.push({ key, bytes });
+    pump();
+  }
+  async function pump() {
+    if (pumping) return;
+    pumping = true;
+    while (queue.length && ready) {
+      const { bytes } = queue.shift();
+      try { await rawWrite(bytes); } catch (e) { console.warn('write failed', e); }
+      await sleep(30);
+    }
+    pumping = false;
+  }
+
+  function setStatus(s, text) { const el = $('#status'); el.dataset.s = s; el.textContent = text; }
+  function setHint(text, isErr) { const el = $('#hint'); el.textContent = text; el.classList.toggle('err', !!isErr); }
+  function setConnectBtn(label, primary) { const b = $('#connectBtn'); b.textContent = label; b.classList.toggle('primary', primary); }
+
+  async function connect() {
+    if (ready) { manualDisconnect = true; device && device.gatt.disconnect(); return; }
+    if (reconnecting) return;
+    if (!navigator.bluetooth) {
+      setHint('Этот браузер не умеет Bluetooth. На iPhone открой страницу в Bluefy, на Android и компьютере в Chrome.', true);
+      return;
+    }
+    if (device) {
+      try { await openLink(); return; } catch (e) { console.warn(e); }
+    }
+    let slow = 0;
+    try {
+      setStatus('busy', 'Поиск…');
+      slow = setTimeout(() => setHint('Окно выбора лампы не появилось? Браузер не может показать его на этой странице. Открой пульт по прямой https-ссылке, например с GitHub Pages.', true), 8000);
+      device = await navigator.bluetooth.requestDevice({
+        filters: [{ namePrefix: 'MELK' }, { namePrefix: 'ELK' }],
+        optionalServices: [0xfff0]
+      });
+      clearTimeout(slow);
+      if (!device.__melkWatch) { device.addEventListener('gattserverdisconnected', onDisconnect); device.__melkWatch = true; }
+      await openLink();
+    } catch (e) {
+      clearTimeout(slow);
+      device = null;
+      setStatus('idle', 'Не подключено');
+      if (e.name === 'NotFoundError') setHint('Лампа не выбрана. Проверь, что LightBlue закрыт, и попробуй ещё раз.');
+      else if (e.name === 'SecurityError' || e.name === 'NotAllowedError') setHint('Браузер запретил Bluetooth на этой странице. Открой её по прямой https-ссылке в Bluefy или Chrome.', true);
+      else setHint('Не получилось подключиться: ' + (e.message || e.name), true);
+    }
+  }
+
+  async function openLink() {
+    setStatus('busy', 'Подключаю…');
+    manualDisconnect = false;
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(0xfff0);
+    ch = await service.getCharacteristic(0xfff3);
+    // MELK login: without it the controller ignores every command
+    await rawWrite(CMD.login1); await sleep(1000);
+    await rawWrite(CMD.login2); await sleep(1000);
+    await rawWrite(CMD.time()); await sleep(150);
+    ready = true;
+    $('#devName').textContent = (device.name || 'MELK') + ' · подключена';
+    setStatus('ok', 'Подключено');
+    setHint('Лампа на связи. Команды уходят сразу.');
+    setConnectBtn('Отключить', false);
+    applyAll();
+  }
+
+  function onDisconnect() {
+    ready = false; ch = null; queue.length = 0;
+    showPacket(null);
+    if (manualDisconnect) {
+      setStatus('idle', 'Не подключено');
+      setHint('Отключено. Нажми, чтобы подключиться снова.');
+      setConnectBtn('Подключить лампу', true);
+      return;
+    }
+    reconnect();
+  }
+
+  async function reconnect() {
+    if (reconnecting || !device) return;
+    reconnecting = true;
+    setConnectBtn('Подключаю…', false);
+    for (let i = 1; i <= 3 && !manualDisconnect; i++) {
+      setStatus('busy', `Связь ${i}/3`);
+      setHint('Связь с лампой пропала, переподключаюсь…');
+      await sleep(800 * i);
+      try { await openLink(); reconnecting = false; return; } catch (e) { console.warn(e); }
+    }
+    reconnecting = false;
+    setStatus('err', 'Нет связи');
+    setHint('Лампа не отвечает. Подойди ближе и нажми «Переподключить».', true);
+    setConnectBtn('Переподключить', true);
+  }
+
+  /* ---------- actions ---------- */
+  function ensureOn() { if (!state.on) { state.on = true; send(CMD.on); send(CMD.bri(state.brightness), 'bri'); } }
+
+  function applyAll() {
+    if (!state.on) { send(CMD.off); return; }
+    send(CMD.on);
+    send(CMD.bri(state.brightness), 'bri');
+    if (state.mode === 'color') send(CMD.color(...state.color), 'color');
+    else { send(CMD.effect(state.effect), 'fx'); send(CMD.speed(state.speed), 'speed'); }
+  }
+
+  function setColor(rgb, fromHsv) {
+    ensureOn();
+    state.mode = 'color';
+    state.color = rgb;
+    if (!fromHsv) { const [h, s] = rgbToHsv(...rgb); state.hue = h; state.sat = s; }
+    send(CMD.color(...rgb), 'color');
+    render();
+  }
+  function setBrightness(v) { ensureOn(); state.brightness = v; send(CMD.bri(v), 'bri'); render(); }
+  function setEffect(n) {
+    ensureOn();
+    state.mode = 'effect';
+    state.effect = (n + 256) % 256;
+    send(CMD.effect(state.effect), 'fx');
+    send(CMD.speed(state.speed), 'speed');
+    render();
+  }
+  function togglePower() {
+    state.on = !state.on;
+    if (state.on) applyAll(); else send(CMD.off);
+    render();
+  }
+
+  function applyScene(s) {
+    state.on = true;
+    state.brightness = s.brightness;
+    if (s.mode === 'color') {
+      state.mode = 'color'; state.color = s.color.slice();
+      const [h, sat] = rgbToHsv(...state.color); state.hue = h; state.sat = sat;
+    } else { state.mode = 'effect'; state.effect = s.effect; state.speed = s.speed; }
+    applyAll();
+    render();
+    toast('Сцена «' + s.name + '»');
+  }
+
+  /* ---------- render ---------- */
+  function effectName(n) { const f = EFFECTS.find(e => e[0] === n); return f ? f[1] : 'Эффект №' + n; }
+
+  function render() {
+    const root = document.documentElement.style;
+    const tube = $('#tube');
+    const glowRgb = state.mode === 'effect' ? [190, 110, 255] : state.color;
+    root.setProperty('--lamp-rgb', glowRgb.join(','));
+    root.setProperty('--glow', state.on ? (0.15 + 0.85 * state.brightness / 100).toFixed(2) : '0');
+    root.setProperty('--fx-dur', (8 - state.speed * 0.07).toFixed(2) + 's');
+    tube.classList.toggle('off', !state.on);
+    tube.classList.toggle('fx', state.mode === 'effect');
+
+    $('#power').setAttribute('aria-pressed', String(state.on));
+    $('#stateTitle').textContent = state.on ? 'Включена' : 'Выключена';
+    $('#stateSub').textContent = state.on
+      ? (state.mode === 'color' ? 'Цвет' : effectName(state.effect)) + ' · ' + state.brightness + '%'
+      : 'Нажми, чтобы включить';
+
+    $('#bri').value = state.brightness; $('#briVal').textContent = state.brightness + '%';
+    $('#hue').value = state.hue; $('#hueVal').textContent = state.hue + '°';
+    $('#sat').value = Math.round(state.sat * 100); $('#satVal').textContent = Math.round(state.sat * 100) + '%';
+    root.setProperty('--hue-color', toHex(hsvToRgb(state.hue, 1, 1)));
+    const hex = toHex(state.color);
+    $('#picker').value = hex; $('#hexVal').textContent = hex.toUpperCase();
+    document.querySelectorAll('.sw').forEach(b => b.setAttribute('aria-pressed', String(state.mode === 'color' && b.dataset.c === hex)));
+
+    document.querySelectorAll('.fx').forEach(b => b.setAttribute('aria-pressed', String(state.mode === 'effect' && +b.dataset.n === state.effect)));
+    $('#fxNum').textContent = '№ ' + state.effect;
+    $('#speed').value = state.speed; $('#speedVal').textContent = state.speed;
+    persist();
+  }
+
+  function showPacket(bytes) {
+    const p = $('#packet');
+    if (bytes) $('#packetHex').textContent = bytesHex(bytes);
+    p.dataset.sent = ready ? '1' : '0';
+    $('#packetTag').textContent = ready ? 'отправлен' : 'предпросмотр';
+  }
+
+  function renderScenes() {
+    const box = $('#scenes');
+    box.innerHTML = '';
+    [...DEFAULT_SCENES, ...customScenes].forEach(s => {
+      const btn = document.createElement('button');
+      btn.className = 'scene';
+      const chip = document.createElement('i');
+      chip.className = 'chip' + (s.mode === 'effect' ? ' rainbow' : '');
+      if (s.mode === 'color') chip.style.setProperty('--c', toHex(s.color));
+      const txt = document.createElement('div');
+      txt.className = 'scene-txt';
+      const b = document.createElement('b'); b.textContent = s.name;
+      const sp = document.createElement('span');
+      sp.textContent = (s.mode === 'color' ? 'цвет' : effectName(s.effect).toLowerCase()) + ' · ' + s.brightness + '%';
+      txt.append(b, sp);
+      btn.append(chip, txt);
+      btn.addEventListener('click', () => applyScene(s));
+      const wrap = document.createElement('div');
+      wrap.className = 'scene-cell';
+      wrap.append(btn);
+      if (s.custom) {
+        btn.classList.add('custom');
+        const del = document.createElement('button');
+        del.className = 'del'; del.textContent = '×'; del.setAttribute('aria-label', 'Удалить сцену ' + s.name);
+        del.addEventListener('click', e => {
+          e.stopPropagation();
+          customScenes = customScenes.filter(x => x.id !== s.id);
+          store.set('lamp.scenes', customScenes); renderScenes(); toast('Сцена удалена');
+        });
+        wrap.append(del);
+      }
+      box.append(wrap);
+    });
+  }
+
+  let toastTimer = 0;
+  function toast(text) {
+    const t = $('#toast'); t.textContent = text; t.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1800);
+  }
+
+  /* ---------- timer ---------- */
+  let timer = null, wake = null;
+  async function holdScreen() { try { wake = navigator.wakeLock ? await navigator.wakeLock.request('screen') : null; } catch (e) { wake = null; } }
+  function releaseScreen() { try { wake && wake.release(); } catch (e) {} wake = null; }
+
+  function startTimer(min) {
+    stopTimer();
+    const total = min * 60000;
+    timer = { end: Date.now() + total, startBri: state.brightness, fade: $('#fade').checked, fadeWin: Math.min(10 * 60000, total) };
+    timer.iv = setInterval(tickTimer, 1000);
+    holdScreen();
+    $('#countdown').hidden = false;
+    tickTimer();
+    toast('Выключу через ' + (min < 60 ? min + ' мин' : (min / 60).toString().replace('.', ',') + ' ч'));
+  }
+  function stopTimer() {
+    if (!timer) return;
+    clearInterval(timer.iv); timer = null; releaseScreen();
+    $('#countdown').hidden = true;
+  }
+  function tickTimer() {
+    const left = timer.end - Date.now();
+    if (left <= 0) {
+      const restore = timer.startBri;
+      stopTimer();
+      state.on = false; send(CMD.off);
+      state.brightness = restore;
+      render(); toast('Лампа выключена по таймеру');
+      return;
+    }
+    if (timer.fade && left < timer.fadeWin) {
+      const b = Math.max(1, Math.round(timer.startBri * left / timer.fadeWin));
+      if (b !== state.brightness && state.on) { state.brightness = b; send(CMD.bri(b), 'bri'); render(); }
+    }
+    const s = Math.ceil(left / 1000);
+    $('#cdText').textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+  document.addEventListener('visibilitychange', () => { if (timer && document.visibilityState === 'visible') holdScreen(); });
+
+  /* ---------- music ---------- */
+  let mic = null;
+  async function startMic() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+      const ac = new (window.AudioContext || window.webkitAudioContext)();
+      const an = ac.createAnalyser(); an.fftSize = 1024; an.smoothingTimeConstant = 0.55;
+      ac.createMediaStreamSource(stream).connect(an);
+      const buf = new Uint8Array(an.frequencyBinCount);
+      let avg = 0, hue = state.hue, last = 0, lastBeat = 0;
+      mic = { stream, ac, raf: 0, prevBri: state.brightness };
+      ensureOn();
+      $('#micBtn').textContent = 'Остановить'; $('#micBtn').classList.remove('primary');
+      $('#micState').textContent = 'слушаю';
+      const tick = t => {
+        an.getByteFrequencyData(buf);
+        let bass = 0; for (let i = 1; i < 10; i++) bass += buf[i]; bass /= 9;
+        avg = avg * 0.94 + bass * 0.06;
+        const sens = +$('#sens').value / 50;
+        const lvl = Math.min(1, (bass / 255) * sens * 1.3);
+        $('#meter').style.width = Math.round(lvl * 100) + '%';
+        if (bass > avg * 1.28 && bass > 55 / sens && t - lastBeat > 220) { lastBeat = t; hue = (hue + 47) % 360; }
+        if (t - last > 90) {
+          last = t;
+          const rgb = hsvToRgb(hue, 1, 1);
+          state.mode = 'color'; state.color = rgb; state.hue = hue; state.sat = 1;
+          state.brightness = Math.max(6, Math.round(8 + lvl * 92));
+          send(CMD.color(...rgb), 'color'); send(CMD.bri(state.brightness), 'bri');
+          render();
+        }
+        mic.raf = requestAnimationFrame(tick);
+      };
+      mic.raf = requestAnimationFrame(tick);
+    } catch (e) {
+      mic = null;
+      $('#micHint').textContent = 'Микрофон недоступен. Разреши доступ к микрофону для этого сайта в настройках браузера и попробуй снова.';
+      $('#micHint').classList.add('err');
+    }
+  }
+  function stopMic() {
+    if (!mic) return;
+    cancelAnimationFrame(mic.raf);
+    mic.stream.getTracks().forEach(t => t.stop());
+    try { mic.ac.close(); } catch (e) {}
+    const prev = mic.prevBri; mic = null;
+    state.brightness = prev; send(CMD.bri(prev), 'bri'); render();
+    $('#micBtn').textContent = 'Слушать музыку через микрофон'; $('#micBtn').classList.add('primary');
+    $('#micState').textContent = 'выкл'; $('#meter').style.width = '0';
+  }
+
+  /* ---------- build UI ---------- */
+  SWATCHES.forEach(([c, name]) => {
+    const b = document.createElement('button');
+    b.className = 'sw'; b.dataset.c = c; b.style.setProperty('--c', c);
+    b.setAttribute('aria-label', name); b.setAttribute('aria-pressed', 'false');
+    b.addEventListener('click', () => setColor(fromHex(c)));
+    $('#swatches').append(b);
+  });
+  EFFECTS.forEach(([n, name]) => {
+    const b = document.createElement('button');
+    b.className = 'fx'; b.dataset.n = n; b.setAttribute('aria-pressed', 'false');
+    const label = document.createElement('span'); label.textContent = name;
+    const num = document.createElement('small'); num.textContent = n;
+    b.append(label, num);
+    b.addEventListener('click', () => setEffect(n));
+    $('#fxGrid').append(b);
+  });
+
+  document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => {
+      const on = t === tab;
+      t.setAttribute('aria-selected', String(on));
+      document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+    });
+    store.set('lamp.tab', tab.id);
+  }));
+  const savedTab = store.get('lamp.tab', null);
+  if (savedTab && document.getElementById(savedTab)) document.getElementById(savedTab).click();
+
+  $('#power').addEventListener('click', togglePower);
+  $('#connectBtn').addEventListener('click', connect);
+  $('#bri').addEventListener('input', e => setBrightness(+e.target.value));
+  const fromSliders = () => { state.hue = +$('#hue').value; state.sat = +$('#sat').value / 100; setColor(hsvToRgb(state.hue, state.sat, 1), true); };
+  $('#hue').addEventListener('input', fromSliders);
+  $('#sat').addEventListener('input', fromSliders);
+  $('#picker').addEventListener('input', e => setColor(fromHex(e.target.value)));
+  $('#fxPrev').addEventListener('click', () => setEffect(state.effect - 1));
+  $('#fxNext').addEventListener('click', () => setEffect(state.effect + 1));
+  $('#speed').addEventListener('input', e => {
+    state.speed = +e.target.value;
+    if (state.mode === 'effect') send(CMD.speed(state.speed), 'speed');
+    render();
+  });
+  $('#saveForm').addEventListener('submit', e => {
+    e.preventDefault();
+    const name = $('#sceneName').value.trim() || 'Сцена ' + (customScenes.length + 1);
+    customScenes.push({
+      id: 'c' + Date.now(), custom: true, name, mode: state.mode, brightness: state.brightness,
+      color: state.color.slice(), effect: state.effect, speed: state.speed
+    });
+    store.set('lamp.scenes', customScenes);
+    $('#sceneName').value = '';
+    renderScenes(); toast('Сохранено: «' + name + '»');
+  });
+  document.querySelectorAll('#timerChips button').forEach(b => b.addEventListener('click', () => startTimer(+b.dataset.min)));
+  $('#cdCancel').addEventListener('click', () => { stopTimer(); toast('Таймер отменён'); });
+  $('#micBtn').addEventListener('click', () => (mic ? stopMic() : startMic()));
+  $('#sens').addEventListener('input', e => { $('#sensVal').textContent = e.target.value; });
+
+  if (!navigator.bluetooth) setHint('В этом браузере нет Bluetooth, работает только предпросмотр. Для управления открой страницу в Bluefy (iPhone) или Chrome.');
+
+  renderScenes();
+  render();
+  showPacket(CMD.color(...state.color));
+})();
+</script>
+</body>
+</html>
